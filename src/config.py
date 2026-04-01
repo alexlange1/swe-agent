@@ -12,6 +12,7 @@ class SolverAgentSource:
     local_path: str | None = None
     repo_url: str | None = None
     agent_subdir: str | None = None
+    commit_sha: str | None = None
 
     def to_dict(self) -> dict[str, str]:
         payload = {
@@ -24,6 +25,8 @@ class SolverAgentSource:
             payload["repo_url"] = self.repo_url
         if self.agent_subdir:
             payload["agent_subdir"] = self.agent_subdir
+        if self.commit_sha:
+            payload["commit_sha"] = self.commit_sha
         return payload
 
 
@@ -66,6 +69,18 @@ class RunConfig:
     docker_solver_read_only_rootfs: bool = True
     docker_solver_user: str | None = None
     docker_solver_no_cache: bool = False
+    validate_netuid: int = 66
+    validate_network: str | None = None
+    validate_subtensor_endpoint: str | None = None
+    validate_rounds: int = 3
+    validate_concurrency: int = 1
+    validate_eval_window_seconds: int = 900
+    validate_weight_interval_blocks: int = 360
+    validate_poll_interval_seconds: int = 30
+    validate_queue_size: int | None = None
+    validate_wallet_name: str | None = None
+    validate_wallet_hotkey: str | None = None
+    validate_wallet_path: str | None = None
     debug: bool = False
 
     @property
@@ -75,6 +90,10 @@ class RunConfig:
     @property
     def task_generation_timeout(self) -> int:
         return max(self.agent_timeout, 300)
+
+    @property
+    def validate_root(self) -> Path:
+        return self.workspace_root / "workspace" / "validate" / f"netuid-{self.validate_netuid}"
 
     @property
     def use_docker_solver(self) -> bool:

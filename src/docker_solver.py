@@ -999,14 +999,60 @@ def _materialize_agent_source(*, config: RunConfig, target_dir: Path) -> Path:
         if not agent.repo_url:
             raise RuntimeError("Docker solver GitHub repo URL is missing")
         target_dir.mkdir(parents=True, exist_ok=True)
-        result = _run(
-            ["git", "clone", "--depth=1", agent.repo_url, str(target_dir)],
-            timeout=300,
-            check=False,
-        )
-        if result.returncode != 0:
-            output = ((result.stdout or "") + (result.stderr or "")).strip()
-            raise RuntimeError(f"Failed to clone agent repository: {output[-500:]}")
+        if agent.commit_sha:
+            clone_result = _run(
+                ["git", "clone", "--filter=blob:none", "--no-checkout", agent.repo_url, str(target_dir)],
+                timeout=300,
+                check=False,
+            )
+            if clone_result.returncode != 0:
+                output = ((clone_result.stdout or "") + (clone_result.stderr or "")).strip()
+                raise RuntimeError(f"Failed to clone agent repository: {output[-500:]}")
+
+            fetch_result = _run(
+                ["git", "fetch", "--depth=1", "origin", agent.commit_sha],
+                cwd=target_dir,
+                timeout=180,
+                check=False,
+            )
+            if fetch_result.returncode != 0:
+                output = ((fetch_result.stdout or "") + (fetch_result.stderr or "")).strip()
+                raise RuntimeError(f"Failed to fetch pinned agent commit: {output[-500:]}")
+
+            checkout_result = _run(
+                ["git", "checkout", "--detach", "FETCH_HEAD"],
+                cwd=target_dir,
+                timeout=120,
+                check=False,
+            )
+            if checkout_result.returncode != 0:
+                output = ((checkout_result.stdout or "") + (checkout_result.stderr or "")).strip()
+                raise RuntimeError(f"Failed to checkout pinned agent commit: {output[-500:]}")
+
+            head_result = _run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=target_dir,
+                timeout=30,
+                check=False,
+            )
+            if head_result.returncode != 0:
+                output = ((head_result.stdout or "") + (head_result.stderr or "")).strip()
+                raise RuntimeError(f"Failed to verify pinned agent commit: {output[-500:]}")
+
+            resolved_head = head_result.stdout.strip()
+            if not resolved_head.startswith(agent.commit_sha):
+                raise RuntimeError(
+                    f"Pinned agent commit mismatch: requested {agent.commit_sha}, got {resolved_head}"
+                )
+        else:
+            clone_result = _run(
+                ["git", "clone", "--depth=1", agent.repo_url, str(target_dir)],
+                timeout=300,
+                check=False,
+            )
+            if clone_result.returncode != 0:
+                output = ((clone_result.stdout or "") + (clone_result.stderr or "")).strip()
+                raise RuntimeError(f"Failed to clone agent repository: {output[-500:]}")
 
         agent_dir = target_dir / (agent.agent_subdir or "agent")
         if not agent_dir.is_dir():
