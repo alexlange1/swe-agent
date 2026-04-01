@@ -81,6 +81,10 @@ class RunConfig:
     validate_wallet_name: str | None = None
     validate_wallet_hotkey: str | None = None
     validate_wallet_path: str | None = None
+    validate_max_duels: int | None = None
+    validate_mock_local_agent: str | None = None
+    validate_mock_set_weights: bool = False
+    validate_mock_rounds: bool = False
     debug: bool = False
 
     @property

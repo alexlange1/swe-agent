@@ -6,7 +6,7 @@ import re
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +33,7 @@ class ValidatorSubmission:
     commit_sha: str
     commitment: str
     commitment_block: int
+    local_path: str | None = None
 
     @property
     def agent_ref(self) -> str:
@@ -51,6 +52,11 @@ class ValidatorSubmission:
             commit_sha=str(payload["commit_sha"]),
             commitment=str(payload["commitment"]),
             commitment_block=int(payload["commitment_block"]),
+            local_path=(
+                str(payload["local_path"])
+                if payload.get("local_path") is not None
+                else None
+            ),
         )
 
 
@@ -173,6 +179,68 @@ class ValidateStageResult:
     duel_count: int
 
 
+@dataclass(slots=True)
+class _MockNeuron:
+    uid: int
+
+
+class _MockCommitments:
+    def get_all_revealed_commitments(self, netuid: int) -> dict[str, tuple[tuple[int, str], ...]]:
+        _ = netuid
+        return {}
+
+    def get_all_commitments(self, netuid: int) -> dict[str, str]:
+        _ = netuid
+        return {}
+
+
+class _MockSubnets:
+    def __init__(self, hotkey_to_uid: dict[str, int]) -> None:
+        self._hotkey_to_uid = hotkey_to_uid
+
+    def get_uid_for_hotkey_on_subnet(self, hotkey: str, netuid: int) -> int | None:
+        _ = netuid
+        return self._hotkey_to_uid.get(hotkey)
+
+
+class _MockNeurons:
+    def __init__(self, uids: list[int]) -> None:
+        self._uids = uids
+
+    def neurons_lite(self, netuid: int) -> list[_MockNeuron]:
+        _ = netuid
+        return [_MockNeuron(uid=uid) for uid in self._uids]
+
+
+class _MockExtrinsics:
+    def set_weights(self, **kwargs: Any) -> dict[str, Any]:
+        return {"mocked": True, "called_with": kwargs}
+
+
+class _MockSubtensorApi:
+    def __init__(self) -> None:
+        self._block = 1_000
+        self._hotkey_to_uid = {
+            "mock-king-hotkey": 1,
+            "mock-challenger-hotkey": 2,
+        }
+        self.commitments = _MockCommitments()
+        self.subnets = _MockSubnets(self._hotkey_to_uid)
+        self.neurons = _MockNeurons(list(self._hotkey_to_uid.values()))
+        self.extrinsics = _MockExtrinsics()
+
+    @property
+    def block(self) -> int:
+        self._block += 1
+        return self._block
+
+    def __enter__(self) -> _MockSubtensorApi:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        _ = exc_type, exc, tb
+
+
 def validate_loop_run(config: RunConfig) -> ValidateStageResult:
     _setup_logging(debug=config.debug)
     if config.validate_rounds < 1:
@@ -183,7 +251,12 @@ def validate_loop_run(config: RunConfig) -> ValidateStageResult:
         raise ValueError("--eval-window-seconds must be at least 1")
     if config.validate_weight_interval_blocks < 1:
         raise ValueError("--weight-interval-blocks must be at least 1")
-    if not config.validate_wallet_name or not config.validate_wallet_hotkey:
+    if config.validate_max_duels is not None and config.validate_max_duels < 1:
+        raise ValueError("--max-duels must be at least 1")
+    if (
+        not config.validate_mock_set_weights
+        and (not config.validate_wallet_name or not config.validate_wallet_hotkey)
+    ):
         raise ValueError("validate requires --wallet-name and --wallet-hotkey")
 
     paths = _prepare_validate_paths(config.validate_root)
@@ -251,6 +324,8 @@ def validate_loop_run(config: RunConfig) -> ValidateStageResult:
                 duel_count += 1
                 _write_duel(paths, duel)
                 _save_state(paths.state_path, state)
+                if config.validate_max_duels is not None and duel_count >= config.validate_max_duels:
+                    break
     finally:
         github_client.close()
 
@@ -442,6 +517,15 @@ def _run_validation_round(
     challenger: ValidatorSubmission,
     config: RunConfig,
 ) -> ValidationRoundResult:
+    if config.validate_mock_rounds:
+        return _run_mock_validation_round(
+            task_name=task_name,
+            duel_id=duel_id,
+            king=king,
+            challenger=challenger,
+            config=config,
+        )
+
     try:
         generate_result = generate_task_run(task_name=task_name, config=config)
         cursor_result = solve_task_run(
@@ -504,6 +588,44 @@ def _run_validation_round(
     )
 
 
+def _run_mock_validation_round(
+    *,
+    task_name: str,
+    duel_id: int,
+    king: ValidatorSubmission,
+    challenger: ValidatorSubmission,
+    config: RunConfig,
+) -> ValidationRoundResult:
+    task_root = config.tasks_root / task_name
+    king_compare_root = task_root / "comparisons" / "cursor--vs--king"
+    challenger_compare_root = task_root / "comparisons" / "cursor--vs--challenger"
+    challenger_lines = max(king.uid, challenger.uid) + 9
+    king_lines = min(king.uid, challenger.uid) + 4
+    winner = "challenger" if challenger_lines > king_lines else "tie"
+    king_compare_root.mkdir(parents=True, exist_ok=True)
+    challenger_compare_root.mkdir(parents=True, exist_ok=True)
+    log.info(
+        "Mock round for duel %s task %s using local agent %s: king uid=%s challenger uid=%s winner=%s",
+        duel_id,
+        task_name,
+        config.validate_mock_local_agent,
+        king.uid,
+        challenger.uid,
+        winner,
+    )
+    return ValidationRoundResult(
+        task_name=task_name,
+        winner=winner,
+        king_lines=king_lines,
+        challenger_lines=challenger_lines,
+        king_similarity_ratio=0.40,
+        challenger_similarity_ratio=0.75,
+        task_root=str(task_root),
+        king_compare_root=str(king_compare_root),
+        challenger_compare_root=str(challenger_compare_root),
+    )
+
+
 def _refresh_queue(*, subtensor, github_client: httpx.Client, config: RunConfig, state: ValidatorState) -> None:
     known_hotkeys = set(state.seen_hotkeys)
     if state.current_king:
@@ -529,6 +651,10 @@ def _fetch_chain_submissions(
     github_client: httpx.Client,
     config: RunConfig,
 ) -> list[ValidatorSubmission]:
+    if config.validate_mock_local_agent:
+        _ = github_client
+        return _mock_submissions(subtensor=subtensor, config=config)
+
     revealed = subtensor.commitments.get_all_revealed_commitments(config.validate_netuid)
     current_commitments = subtensor.commitments.get_all_commitments(config.validate_netuid)
     submissions: list[ValidatorSubmission] = []
@@ -573,6 +699,41 @@ def _fetch_chain_submissions(
             submissions.append(submission)
 
     submissions.sort(key=lambda item: (item.commitment_block, item.uid, item.hotkey))
+    return submissions
+
+
+def _mock_submissions(*, subtensor, config: RunConfig) -> list[ValidatorSubmission]:
+    if not config.validate_mock_local_agent:
+        return []
+    local_agent_path = str(Path(config.validate_mock_local_agent).expanduser().resolve())
+    block = subtensor.block
+    submissions = [
+        ValidatorSubmission(
+            hotkey="mock-king-hotkey",
+            uid=1,
+            repo_full_name="local/mock-agent",
+            repo_url=local_agent_path,
+            commit_sha="local-king",
+            commitment="local/mock-agent@local-king",
+            commitment_block=block - 1,
+            local_path=local_agent_path,
+        ),
+        ValidatorSubmission(
+            hotkey="mock-challenger-hotkey",
+            uid=2,
+            repo_full_name="local/mock-agent",
+            repo_url=local_agent_path,
+            commit_sha="local-challenger",
+            commitment="local/mock-agent@local-challenger",
+            commitment_block=block,
+            local_path=local_agent_path,
+        ),
+    ]
+    log.info(
+        "Using %s mock submissions backed by local agent %s",
+        len(submissions),
+        local_agent_path,
+    )
     return submissions
 
 
@@ -649,6 +810,9 @@ def _submission_is_eligible(
     current_uid = subtensor.subnets.get_uid_for_hotkey_on_subnet(submission.hotkey, config.validate_netuid)
     if current_uid is None:
         return False
+    if submission.local_path is not None:
+        submission.uid = int(current_uid)
+        return True
     if not _is_public_commit(github_client, submission.repo_full_name, submission.commit_sha):
         return False
     submission.uid = int(current_uid)
@@ -714,6 +878,17 @@ def _maybe_set_weights(*, subtensor, config: RunConfig, state: ValidatorState, c
     king.uid = int(current_uid)
     uids = [int(neuron.uid) for neuron in neurons]
     weights = [1.0 if uid == king.uid else 0.0 for uid in uids]
+    if config.validate_mock_set_weights:
+        state.last_weight_block = current_block
+        log.info(
+            "Mocked set_weights at block %s for netuid %s to king uid=%s uids=%s weights=%s",
+            current_block,
+            config.validate_netuid,
+            king.uid,
+            uids,
+            weights,
+        )
+        return
     wallet = bt.Wallet(
         name=config.validate_wallet_name,
         hotkey=config.validate_wallet_hotkey,
@@ -747,6 +922,18 @@ def _build_cursor_config(config: RunConfig) -> RunConfig:
 
 
 def _build_agent_config(config: RunConfig, submission: ValidatorSubmission) -> RunConfig:
+    if submission.local_path is not None:
+        agent_source = SolverAgentSource(
+            raw=submission.local_path,
+            kind="local_path",
+            local_path=submission.local_path,
+        )
+        return replace(
+            config,
+            solver_backend="docker-pi",
+            solve_agent=submission.local_path,
+            solver_agent_source=agent_source,
+        )
     agent_source = SolverAgentSource(
         raw=submission.agent_ref,
         kind="github_repo",
@@ -765,7 +952,7 @@ def _build_agent_config(config: RunConfig, submission: ValidatorSubmission) -> R
 def _allocate_task_name(state: ValidatorState) -> str:
     index = state.next_task_index
     state.next_task_index += 1
-    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S")
+    timestamp = datetime.now(tz=UTC).strftime("%Y%m%d%H%M%S")
     return f"validate-{timestamp}-{index:06d}"
 
 
@@ -867,6 +1054,8 @@ def _is_public_commit(github_client: httpx.Client, repo_full_name: str, commit_s
 
 
 def _open_subtensor(config: RunConfig):
+    if config.validate_mock_local_agent:
+        return _MockSubtensorApi()
     network = config.validate_subtensor_endpoint or config.validate_network
     if network:
         return bt.SubtensorApi(network=network)
@@ -874,4 +1063,4 @@ def _open_subtensor(config: RunConfig):
 
 
 def _timestamp() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
+    return datetime.now(tz=UTC).isoformat()

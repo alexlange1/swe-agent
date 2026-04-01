@@ -22,7 +22,6 @@ from docker_solver import (
     _read_limited_output,
     _remove_container,
     _run,
-    _oversized_output_stream,
     _write_text_to_container,
     _apply_patch_to_repo,
 )
@@ -293,15 +292,6 @@ def _run_cursor_command(
             if time.monotonic() - start > timeout:
                 timed_out = True
                 _kill_container(container_id)
-            else:
-                oversized_stream = _oversized_output_stream(
-                    stdout_path=Path(stdout_file.name),
-                    stderr_path=Path(stderr_file.name),
-                    max_output_bytes=max_output_bytes,
-                )
-                if oversized_stream is not None:
-                    sandbox_violation_reason = f"{oversized_stream} exceeded output limit"
-                    _kill_container(container_id)
             time.sleep(0.2)
 
         try:
@@ -310,8 +300,8 @@ def _run_cursor_command(
             process.kill()
             process.wait(timeout=10)
 
-        stdout = _read_limited_output(Path(stdout_file.name))
-        stderr = _read_limited_output(Path(stderr_file.name))
+        stdout = _read_limited_output(Path(stdout_file.name), max_output_bytes=max_output_bytes)
+        stderr = _read_limited_output(Path(stderr_file.name), max_output_bytes=max_output_bytes)
         if timed_out:
             stderr = f"{stderr}\nCursor solver timed out after {timeout}s".strip()
         if sandbox_violation_reason:

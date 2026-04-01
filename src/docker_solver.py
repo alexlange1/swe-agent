@@ -546,15 +546,6 @@ def _run_solver_command(
             elif time.monotonic() - start > timeout:
                 timed_out = True
                 _kill_container(container_id)
-            else:
-                oversized_stream = _oversized_output_stream(
-                    stdout_path=Path(stdout_file.name),
-                    stderr_path=Path(stderr_file.name),
-                    max_output_bytes=max_output_bytes,
-                )
-                if oversized_stream is not None:
-                    sandbox_violation_reason = f"{oversized_stream} exceeded output limit"
-                    _kill_container(container_id)
             time.sleep(0.2)
 
         try:
@@ -563,8 +554,8 @@ def _run_solver_command(
             process.kill()
             process.wait(timeout=10)
 
-        stdout = _read_limited_output(Path(stdout_file.name))
-        stderr = _read_limited_output(Path(stderr_file.name))
+        stdout = _read_limited_output(Path(stdout_file.name), max_output_bytes=max_output_bytes)
+        stderr = _read_limited_output(Path(stderr_file.name), max_output_bytes=max_output_bytes)
 
         if timed_out:
             stderr = f"{stderr}\nDocker tau solver timed out after {timeout}s".strip()
@@ -949,23 +940,13 @@ def _proxy_bridge_script() -> str:
     ).strip()
 
 
-def _oversized_output_stream(
-    *,
-    stdout_path: Path,
-    stderr_path: Path,
-    max_output_bytes: int,
-) -> str | None:
-    if stdout_path.exists() and stdout_path.stat().st_size > max_output_bytes:
-        return "stdout"
-    if stderr_path.exists() and stderr_path.stat().st_size > max_output_bytes:
-        return "stderr"
-    return None
-
-
-def _read_limited_output(path: Path) -> str:
+def _read_limited_output(path: Path, *, max_output_bytes: int | None = None) -> str:
     if not path.exists():
         return ""
-    return path.read_text(encoding="utf-8", errors="replace")
+    raw_bytes = path.read_bytes()
+    if max_output_bytes is not None and len(raw_bytes) > max_output_bytes:
+        raw_bytes = raw_bytes[-max_output_bytes:]
+    return raw_bytes.decode("utf-8", errors="replace")
 
 
 def _container_is_running(container_id: str) -> bool:

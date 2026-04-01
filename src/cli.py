@@ -89,6 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_shared_args(validate)
     _add_solver_args(validate)
+    validate.set_defaults(agent_timeout=1800, docker_solver_max_output_bytes=100000000)
     validate.add_argument("--netuid", type=int, default=66, help="Subnet netuid to validate.")
     validate.add_argument("--network", help="Optional Bittensor network name or websocket endpoint.")
     validate.add_argument(
@@ -120,9 +121,28 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="Optional maximum number of queued challengers to keep in memory.",
     )
+    validate.add_argument(
+        "--max-duels",
+        type=int,
+        help="Optional maximum number of duels to run before exiting.",
+    )
     validate.add_argument("--wallet-name", required=True, help="Wallet name to use for set_weights.")
     validate.add_argument("--wallet-hotkey", required=True, help="Wallet hotkey to use for set_weights.")
     validate.add_argument("--wallet-path", help="Optional wallet path override.")
+    validate.add_argument(
+        "--mock-local-agent",
+        help="Optional local agent workspace path to use for offline mock validation submissions.",
+    )
+    validate.add_argument(
+        "--mock-set-weights",
+        action="store_true",
+        help="Log set_weights calls instead of submitting them on-chain.",
+    )
+    validate.add_argument(
+        "--mock-rounds",
+        action="store_true",
+        help="Mock validation rounds instead of generating tasks and running solves.",
+    )
     return parser
 
 
@@ -330,6 +350,12 @@ def _build_validate_config(args: argparse.Namespace) -> RunConfig:
         validate_wallet_name=args.wallet_name,
         validate_wallet_hotkey=args.wallet_hotkey,
         validate_wallet_path=args.wallet_path,
+        validate_max_duels=args.max_duels,
+        validate_mock_local_agent=(
+            str(Path(args.mock_local_agent).expanduser().resolve()) if args.mock_local_agent else None
+        ),
+        validate_mock_set_weights=args.mock_set_weights,
+        validate_mock_rounds=args.mock_rounds,
         debug=args.debug,
     )
 
@@ -569,7 +595,7 @@ def _add_solver_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _load_dotenv() -> None:
-    dotenv_path = Path(__file__).resolve().parents[2] / ".env"
+    dotenv_path = Path(__file__).resolve().parents[1] / ".env"
     if not dotenv_path.exists():
         return
 
