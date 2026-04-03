@@ -214,6 +214,13 @@ class OpenRouterProxy:
             def do_POST(self) -> None:  # noqa: N802
                 self._handle()
 
+            def address_string(self) -> str:
+                # Unix sockets pass a string (often empty) as client_address
+                # instead of the (host, port) tuple that the base class expects.
+                if isinstance(self.client_address, str):
+                    return self.client_address or "unix"
+                return super().address_string()
+
             def log_message(self, format: str, *args: object) -> None:
                 log.debug("proxy %s - %s", self.address_string(), format % args)
 
