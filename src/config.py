@@ -74,7 +74,6 @@ class RunConfig:
     validate_subtensor_endpoint: str | None = None
     validate_duel_rounds: int = 25
     validate_win_margin: int = 4
-    validate_copy_similarity_threshold: float = 0.90
     validate_max_concurrency: int = 5
     validate_task_pool_target: int = 30
     validate_weight_interval_blocks: int = 360
@@ -83,10 +82,6 @@ class RunConfig:
     validate_wallet_name: str | None = None
     validate_wallet_hotkey: str | None = None
     validate_wallet_path: str | None = None
-    validate_max_duels: int | None = None
-    validate_mock_local_agent: str | None = None
-    validate_mock_set_weights: bool = False
-    validate_mock_rounds: bool = False
     debug: bool = False
 
     @property

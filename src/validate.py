@@ -510,8 +510,9 @@ def _run_duel(
     if wins >= threshold:
         scored_sim = [r for r in rounds if r.scored and r.king_challenger_similarity > 0]
         mean_sim = sum(r.king_challenger_similarity for r in scored_sim) / len(scored_sim) if scored_sim else 0.0
-        if mean_sim >= config.validate_copy_similarity_threshold:
-            dq_reason = f"copy detected (similarity {mean_sim:.3f} >= {config.validate_copy_similarity_threshold})"
+        _COPY_THRESHOLD = 0.90
+        if mean_sim >= _COPY_THRESHOLD:
+            dq_reason = f"copy detected (similarity {mean_sim:.3f} >= {_COPY_THRESHOLD})"
             log.warning("Duel %d: %s", duel_id, dq_reason)
         else:
             king_replaced = True
@@ -535,8 +536,7 @@ def validate_loop_run(config: RunConfig) -> ValidateStageResult:
     log.info("Scoring: %d rounds, need %d wins to dethrone (margin=%d)",
              config.validate_duel_rounds, threshold, config.validate_win_margin)
 
-    if (not config.validate_mock_set_weights
-            and (not config.validate_wallet_name or not config.validate_wallet_hotkey)):
+    if not config.validate_wallet_name or not config.validate_wallet_hotkey:
         raise ValueError("validate requires --wallet-name and --wallet-hotkey")
 
     paths = _prepare_validate_paths(config.validate_root)
@@ -701,9 +701,6 @@ def validate_loop_run(config: RunConfig) -> ValidateStageResult:
                 _cleanup_old_tasks(config.tasks_root)
                 _cleanup_orphaned_containers()
 
-                if config.validate_max_duels is not None and duel_count >= config.validate_max_duels:
-                    break
-
                 time.sleep(config.validate_poll_interval_seconds)
 
     finally:
@@ -848,8 +845,6 @@ def _refresh_queue(*, chain_submissions: list[ValidatorSubmission], config: RunC
 
 
 def _fetch_chain_submissions(*, subtensor, github_client: httpx.Client, config: RunConfig) -> list[ValidatorSubmission]:
-    if config.validate_mock_local_agent:
-        return _mock_submissions(subtensor=subtensor, config=config)
     revealed = subtensor.commitments.get_all_revealed_commitments(config.validate_netuid)
     current_commitments = subtensor.commitments.get_all_commitments(config.validate_netuid)
     submissions: list[ValidatorSubmission] = []
@@ -888,16 +883,6 @@ def _fetch_chain_submissions(*, subtensor, github_client: httpx.Client, config: 
     submissions.sort(key=lambda s: (s.commitment_block, s.uid, s.hotkey))
     return submissions
 
-
-def _mock_submissions(*, subtensor, config: RunConfig) -> list[ValidatorSubmission]:
-    if not config.validate_mock_local_agent:
-        return []
-    p = str(Path(config.validate_mock_local_agent).expanduser().resolve())
-    b = subtensor.block
-    return [
-        ValidatorSubmission(hotkey="mock-king-hotkey", uid=1, repo_full_name="local/mock-agent", repo_url=p, commit_sha="local-king", commitment="local/mock-agent@local-king", commitment_block=b-1, local_path=p),
-        ValidatorSubmission(hotkey="mock-challenger-hotkey", uid=2, repo_full_name="local/mock-agent", repo_url=p, commit_sha="local-challenger", commitment="local/mock-agent@local-challenger", commitment_block=b, local_path=p),
-    ]
 
 
 def _build_submission(*, subtensor, github_client, config, hotkey, commitment, commitment_block) -> ValidatorSubmission | None:
@@ -987,10 +972,6 @@ def _maybe_set_weights(*, subtensor, config, state, current_block):
     king.uid = int(uid)
     uids = [int(n.uid) for n in neurons]
     weights = [1.0 if u == king.uid else 0.0 for u in uids]
-    if config.validate_mock_set_weights:
-        state.last_weight_block = current_block
-        log.info("Mocked set_weights at block %s to king uid=%s", current_block, king.uid)
-        return
     wallet = bt.Wallet(name=config.validate_wallet_name, hotkey=config.validate_wallet_hotkey, path=config.validate_wallet_path)
     resp = subtensor.extrinsics.set_weights(wallet=wallet, netuid=config.validate_netuid, uids=uids, weights=weights, wait_for_inclusion=True, wait_for_finalization=True)
     state.last_weight_block = current_block
@@ -1090,8 +1071,6 @@ def _is_public_commit(client: httpx.Client, repo: str, sha: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _open_subtensor(config: RunConfig):
-    if config.validate_mock_local_agent:
-        return _MockSubtensorApi()
     network = config.validate_subtensor_endpoint or config.validate_network
     if network:
         return bt.SubtensorApi(network=network, websocket_shutdown_timer=0)

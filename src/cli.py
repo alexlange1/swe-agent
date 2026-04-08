@@ -104,75 +104,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--subtensor-endpoint",
         help="Optional websocket endpoint that overrides --network for chain access.",
     )
-    validate.add_argument(
-        "--duel-rounds",
-        type=int,
-        default=25,
-        help="Fixed number of scored rounds per challenger duel.",
-    )
-    validate.add_argument(
-        "--win-margin",
-        type=int,
-        default=4,
-        help="Extra wins above 50%% needed to dethrone (threshold = N//2 + K + 1).",
-    )
-    validate.add_argument(
-        "--copy-similarity-threshold",
-        type=float,
-        default=0.90,
-        help="If mean king-challenger patch similarity exceeds this, disqualify as a copy.",
-    )
-    validate.add_argument(
-        "--max-concurrency",
-        type=int,
-        default=5,
-        help="Maximum number of parallel challenger duels.",
-    )
-    validate.add_argument(
-        "--task-pool-target",
-        type=int,
-        default=30,
-        help="Number of pre-solved tasks to maintain in the pool.",
-    )
-    validate.add_argument(
-        "--weight-interval-blocks",
-        type=int,
-        default=360,
-        help="How often to set weights to the current king.",
-    )
-    validate.add_argument(
-        "--poll-interval-seconds",
-        type=int,
-        default=30,
-        help="How long to sleep before polling the chain again when idle.",
-    )
-    validate.add_argument(
-        "--queue-size",
-        type=int,
-        help="Optional maximum number of queued challengers to keep in memory.",
-    )
-    validate.add_argument(
-        "--max-duels",
-        type=int,
-        help="Optional maximum number of duels to run before exiting.",
-    )
-    validate.add_argument("--wallet-name", required=True, help="Wallet name to use for set_weights.")
-    validate.add_argument("--wallet-hotkey", required=True, help="Wallet hotkey to use for set_weights.")
-    validate.add_argument("--wallet-path", help="Optional wallet path override.")
-    validate.add_argument(
-        "--mock-local-agent",
-        help="Optional local agent workspace path to use for offline mock validation submissions.",
-    )
-    validate.add_argument(
-        "--mock-set-weights",
-        action="store_true",
-        help="Log set_weights calls instead of submitting them on-chain.",
-    )
-    validate.add_argument(
-        "--mock-rounds",
-        action="store_true",
-        help="Mock validation rounds instead of generating tasks and running solves.",
-    )
+    validate.add_argument("-N", "--duel-rounds", type=int, default=25, help="Rounds per duel.")
+    validate.add_argument("-K", "--win-margin", type=int, default=4, help="Extra wins above 50%% to dethrone.")
+    validate.add_argument("--max-concurrency", type=int, default=5, help="Max parallel duels.")
+    validate.add_argument("--task-pool-target", type=int, default=30, help="Pre-solved tasks to keep in pool.")
+    validate.add_argument("--weight-interval-blocks", type=int, default=360, help="Blocks between weight sets.")
+    validate.add_argument("--poll-interval-seconds", type=int, default=30, help="Seconds between chain polls.")
+    validate.add_argument("--queue-size", type=int, help="Max queued challengers.")
+    validate.add_argument("--wallet-name", required=True, help="Wallet coldkey name.")
+    validate.add_argument("--wallet-hotkey", required=True, help="Wallet hotkey name.")
+    validate.add_argument("--wallet-path", help="Wallet path override.")
     return parser
 
 
@@ -373,7 +314,6 @@ def _build_validate_config(args: argparse.Namespace) -> RunConfig:
         validate_subtensor_endpoint=args.subtensor_endpoint,
         validate_duel_rounds=args.duel_rounds,
         validate_win_margin=args.win_margin,
-        validate_copy_similarity_threshold=args.copy_similarity_threshold,
         validate_max_concurrency=args.max_concurrency,
         validate_task_pool_target=args.task_pool_target,
         validate_weight_interval_blocks=args.weight_interval_blocks,
@@ -382,12 +322,6 @@ def _build_validate_config(args: argparse.Namespace) -> RunConfig:
         validate_wallet_name=args.wallet_name,
         validate_wallet_hotkey=args.wallet_hotkey,
         validate_wallet_path=args.wallet_path,
-        validate_max_duels=args.max_duels,
-        validate_mock_local_agent=(
-            str(Path(args.mock_local_agent).expanduser().resolve()) if args.mock_local_agent else None
-        ),
-        validate_mock_set_weights=args.mock_set_weights,
-        validate_mock_rounds=args.mock_rounds,
         debug=args.debug,
     )
 
