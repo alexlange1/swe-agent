@@ -511,6 +511,14 @@ def validate_loop_run(config: RunConfig) -> ValidateStageResult:
             chain_data = _fetch_chain_data(config.validate_netuid) or chain_data
             chain_submissions = _fetch_chain_submissions(subtensor=subtensor, github_client=github_client, config=config)
             _refresh_queue(chain_submissions=chain_submissions, config=config, state=state)
+
+            # Recovery: if no king and empty queue, clear seen list so miners can re-enter
+            if state.current_king is None and not state.queue and state.seen_hotkeys:
+                log.warning("No king and empty queue with %d seen hotkeys; clearing seen list for recovery", len(state.seen_hotkeys))
+                kept = set(state.disqualified_hotkeys)
+                state.seen_hotkeys = [hk for hk in state.seen_hotkeys if hk in kept]
+                _refresh_queue(chain_submissions=chain_submissions, config=config, state=state)
+
             _ensure_king(state=state)
             if state.current_king:
                 if not state.king_since:
@@ -530,6 +538,12 @@ def validate_loop_run(config: RunConfig) -> ValidateStageResult:
                 chain_data = _fetch_chain_data(config.validate_netuid) or chain_data
                 chain_submissions = _fetch_chain_submissions(subtensor=subtensor, github_client=github_client, config=config)
                 _refresh_queue(chain_submissions=chain_submissions, config=config, state=state)
+
+                if state.current_king is None and not state.queue and state.seen_hotkeys:
+                    log.warning("Recovery: clearing seen list (%d entries) to allow re-queuing", len(state.seen_hotkeys))
+                    kept = set(state.disqualified_hotkeys)
+                    state.seen_hotkeys = [hk for hk in state.seen_hotkeys if hk in kept]
+                    _refresh_queue(chain_submissions=chain_submissions, config=config, state=state)
 
                 prev_king = state.current_king.hotkey if state.current_king else None
                 _ensure_king(state=state)
@@ -980,12 +994,23 @@ def _parse_submission_commitment(raw: str) -> tuple[str, str] | None:
                 return "/".join(parts[:2]), parts[3]
     return None
 
+_verified_commits: dict[str, str] = {}
+
+
 def _resolve_public_commit(client: httpx.Client, repo: str, sha: str) -> str | None:
+    cache_key = f"{repo}@{sha}"
+    if cache_key in _verified_commits:
+        return _verified_commits[cache_key]
     r = client.get(f"/repos/{repo}")
     if r.status_code != 200 or r.json().get("private") is not False:
         return None
     r2 = client.get(f"/repos/{repo}/commits/{sha}")
-    return r2.json().get("sha", sha) if r2.status_code == 200 else None
+    if r2.status_code != 200:
+        return None
+    full_sha = r2.json().get("sha", sha)
+    _verified_commits[cache_key] = full_sha
+    return full_sha
+
 
 def _is_public_commit(client: httpx.Client, repo: str, sha: str) -> bool:
     return _resolve_public_commit(client, repo, sha) is not None
