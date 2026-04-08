@@ -33,7 +33,7 @@ _DEFAULT_GITHUB_AGENT_SUBDIR = "agent"
 _GITHUB_COMMIT_RE = re.compile(
     r"^(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)@(?P<sha>[0-9a-fA-F]{7,64})$"
 )
-_BASELINE_MODEL = "anthropic/claude-opus-4.6"
+_BASELINE_MODEL = "gemini-3-flash"
 _MIN_PATCH_LINES = 100
 
 
@@ -365,12 +365,17 @@ def _run_duel(
             if chall_timed_out:
                 log.info("Duel %d: challenger uid=%s timed out on %s", duel_id, challenger.uid, task.task_name)
 
-            chall_compare = compare_task_run(
-                task_name=task.task_name, solution_names=["baseline", solution_label], config=config,
-            )
-            kc_compare = compare_task_run(
-                task_name=task.task_name, solution_names=["king", solution_label], config=config,
-            )
+            with ThreadPoolExecutor(max_workers=2) as cmp_exec:
+                chall_fut = cmp_exec.submit(
+                    compare_task_run, task_name=task.task_name,
+                    solution_names=["baseline", solution_label], config=config,
+                )
+                kc_fut = cmp_exec.submit(
+                    compare_task_run, task_name=task.task_name,
+                    solution_names=["king", solution_label], config=config,
+                )
+                chall_compare = chall_fut.result()
+                kc_compare = kc_fut.result()
 
             c_lines = 0 if chall_timed_out else chall_compare.matched_changed_lines
             k_lines = task.king_lines
@@ -501,7 +506,7 @@ def validate_loop_run(config: RunConfig) -> ValidateStageResult:
     # Active duels: hotkey -> (future, cancel_event, challenger)
     active_duels: dict[str, tuple[Future, threading.Event, ValidatorSubmission]] = {}
     duel_progress: dict[str, dict[str, Any]] = {}
-    executor = ThreadPoolExecutor(max_workers=config.validate_max_concurrency + 2)
+    executor = ThreadPoolExecutor(max_workers=config.validate_max_concurrency + config.validate_pool_filler_concurrency + 1)
 
     try:
         with _open_subtensor(config) as subtensor:
@@ -524,8 +529,9 @@ def validate_loop_run(config: RunConfig) -> ValidateStageResult:
                 if not state.king_since:
                     state.king_since = _timestamp()
 
-            # Start pool filler
-            executor.submit(_pool_filler_loop, config, state, pool, pool_stop)
+            # Start pool fillers
+            for _ in range(config.validate_pool_filler_concurrency):
+                executor.submit(_pool_filler_loop, config, state, pool, pool_stop)
 
             while True:
                 # Poll chain
@@ -944,7 +950,7 @@ def _maybe_set_weights(*, subtensor, config, state, current_block):
 
 def _build_baseline_config(config: RunConfig) -> RunConfig:
     model = config.baseline_model or _BASELINE_MODEL
-    return replace(config, solver_backend="claude", solve_agent="baseline", solver_agent_source=None, solver_model=model)
+    return replace(config, solver_backend="cursor", solve_agent="baseline", solver_agent_source=None, solver_model=model)
 
 def _build_agent_config(config: RunConfig, sub: ValidatorSubmission) -> RunConfig:
     src = SolverAgentSource(raw=sub.agent_ref, kind="github_repo", repo_url=sub.repo_url, agent_subdir=_DEFAULT_GITHUB_AGENT_SUBDIR, commit_sha=sub.commit_sha)
