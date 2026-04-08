@@ -12,7 +12,7 @@ from cursor_runner import solve_task_with_cursor_in_docker
 from docker_solver import solve_task_in_docker
 from eval import evaluate_candidate_pair
 from github_miner import GitHubMiner
-from solver_runner import solve_task
+from solver_runner import solve_task, solve_task_claw
 from task_generation import generate_task_description
 from workspace import (
     delete_all_task_workspaces,
@@ -133,6 +133,14 @@ def solve_task_run(*, task_name: str, solution_name: str, config: RunConfig) -> 
             timeout=config.agent_timeout,
             config=config,
             run_label=f"{task_name}-{solution_name}",
+        )
+    elif config.use_claw_solver:
+        solve_result = solve_task_claw(
+            repo_dir=solution_paths.repo_dir,
+            task=task,
+            model=config.solver_model,
+            timeout=config.agent_timeout,
+            config=config,
         )
     elif config.use_cursor_solver:
         solve_result = solve_task_with_cursor_in_docker(

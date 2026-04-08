@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from claude_runner import run_claude
+from claw_runner import run_claw
 from config import RunConfig
 from openrouter_proxy import SolveBudget, SolveUsageSummary
 from task_generation import GeneratedTask
@@ -100,6 +101,66 @@ def solve_task(
     usage_summary = result.usage_summary
     log.debug(
         "Solver exited code=%s elapsed=%.2fs total_tokens=%s tool_calls=%s exit_reason=%s",
+        result.returncode,
+        result.elapsed_seconds,
+        usage_summary.total_tokens if usage_summary else parsed_total_tokens,
+        tool_calls,
+        exit_reason,
+    )
+
+    return SolveResult(
+        success=success,
+        elapsed_seconds=result.elapsed_seconds,
+        raw_output=raw_output,
+        model=model,
+        solution_diff=solution_diff,
+        exit_reason=exit_reason,
+        usage_summary=usage_summary,
+        request_count=usage_summary.request_count if usage_summary else None,
+        prompt_tokens=usage_summary.prompt_tokens if usage_summary else None,
+        completion_tokens=usage_summary.completion_tokens if usage_summary else None,
+        total_tokens=usage_summary.total_tokens if usage_summary else parsed_total_tokens,
+        cached_tokens=usage_summary.cached_tokens if usage_summary else None,
+        cache_write_tokens=usage_summary.cache_write_tokens if usage_summary else None,
+        reasoning_tokens=usage_summary.reasoning_tokens if usage_summary else None,
+        cost=usage_summary.cost if usage_summary else None,
+        tool_calls=tool_calls,
+    )
+
+
+def solve_task_claw(
+    *,
+    repo_dir: Path,
+    task: GeneratedTask,
+    model: str | None,
+    timeout: int,
+    config: RunConfig | None = None,
+) -> SolveResult:
+    prompt = build_solver_prompt(task)
+    log.debug("Prepared solver prompt for task %r (claw)", task.title)
+    result = run_claw(
+        prompt=prompt,
+        cwd=repo_dir,
+        model=model,
+        timeout=timeout,
+        output_format="text",
+        openrouter_api_key=config.openrouter_api_key if config else None,
+        solve_budget=SolveBudget.from_config(config),
+    )
+
+    raw_output, parsed_total_tokens, tool_calls = _parse_claude_json_output(result.stdout)
+    if not raw_output:
+        raw_output = result.combined_output
+    exit_reason = _resolve_exit_reason(result)
+    success = result.returncode == 0 and exit_reason == COMPLETED_EXIT_REASON
+    if not raw_output.strip() and success:
+        raw_output = "Solver returned empty output from Claw"
+        exit_reason = SOLVER_ERROR_EXIT_REASON
+        success = False
+    solution_diff = git_diff(repo_dir)
+    usage_summary = result.usage_summary
+    log.debug(
+        "Claw solver exited code=%s elapsed=%.2fs total_tokens=%s tool_calls=%s exit_reason=%s",
         result.returncode,
         result.elapsed_seconds,
         usage_summary.total_tokens if usage_summary else parsed_total_tokens,

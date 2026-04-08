@@ -59,7 +59,7 @@ class RunConfig:
     docker_solver_image: str | None = None
     solver_agent_source: SolverAgentSource | None = None
     docker_solver_memory: str = "2g"
-    docker_solver_cpus: str = "2"
+    docker_solver_cpus: str = "1"
     docker_solver_pids_limit: int = 256
     docker_solver_tmp_size: str = "128m"
     docker_solver_workdir_size: str = "2g"
@@ -75,8 +75,9 @@ class RunConfig:
     validate_subtensor_endpoint: str | None = None
     validate_duel_rounds: int = 25
     validate_win_margin: int = 4
-    validate_max_concurrency: int = 5
-    validate_task_pool_target: int = 30
+    validate_max_concurrency: int = 20
+    validate_task_pool_target: int = 60
+    validate_pool_filler_concurrency: int = 3
     validate_weight_interval_blocks: int = 360
     validate_poll_interval_seconds: int = 30
     validate_queue_size: int | None = None
@@ -104,6 +105,10 @@ class RunConfig:
     @property
     def use_cursor_solver(self) -> bool:
         return self.solver_backend == "cursor"
+
+    @property
+    def use_claw_solver(self) -> bool:
+        return self.solver_backend == "claw"
 
     @property
     def use_claude_solver(self) -> bool:
