@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import logging
 import os
@@ -149,7 +150,7 @@ def duel_to_summary(duel_dict: dict[str, Any]) -> dict[str, Any]:
                 "king_challenger_similarity": r.get("king_challenger_similarity", 0.0),
                 "king_lines": r.get("king_lines", 0),
                 "challenger_lines": r.get("challenger_lines", 0),
-                "cursor_lines": r.get("cursor_lines", 0),
+                "baseline_lines": r.get("baseline_lines", 0),
             }
             for r in scored_rounds
         ],
@@ -169,12 +170,18 @@ def publish_round_data(
     duel_id: int,
     task_name: str,
     tasks_root: Path,
+    solution_labels: dict[str, str] | None = None,
 ) -> bool:
     """Upload all artifacts for a single validation round to R2.
 
-    Reads task.json, reference.patch, solution diffs, and comparison JSONs
-    from the local task workspace and uploads them under:
+    Reads task.json, reference.patch, solution diffs, solve metadata,
+    rollouts, and comparison JSONs from the local task workspace and
+    uploads them under:
         sn66/duels/{duel_id}/rounds/{task_name}/...
+
+    ``solution_labels`` maps canonical R2 names to actual on-disk solution
+    folder names, e.g. ``{"baseline": "baseline", "challenger": "challenger-42"}``.
+    When *None*, falls back to the canonical names as-is.
 
     Returns True if at least one file was uploaded, False otherwise.
     """
@@ -185,6 +192,7 @@ def publish_round_data(
 
     prefix = _round_key_prefix(duel_id, task_name)
     task_paths = build_task_paths(tasks_root, task_name)
+    labels = solution_labels or {}
     uploaded = 0
 
     def _try_upload_json_file(local_path: Path, r2_key: str) -> None:
@@ -208,27 +216,64 @@ def publish_round_data(
         except Exception:
             log.exception("Failed to upload %s to R2 (non-fatal)", r2_key)
 
-    _try_upload_json_file(task_paths.task_json_path, f"{prefix}task.json")
-    _try_upload_text_file(task_paths.reference_patch_path, f"{prefix}reference.patch", "text/x-diff")
+    def _try_upload_gzip_file(local_path: Path, r2_key: str) -> None:
+        nonlocal uploaded
+        if not local_path.exists():
+            return
+        try:
+            raw = local_path.read_bytes()
+            compressed = gzip.compress(raw)
+            client = _get_s3_client()
+            if client is None:
+                return
+            client.put_object(
+                Bucket=_get_bucket(),
+                Key=r2_key,
+                Body=compressed,
+                ContentType="application/x-ndjson",
+                ContentEncoding="gzip",
+            )
+            uploaded += 1
+        except Exception:
+            log.exception("Failed to upload %s to R2 (non-fatal)", r2_key)
 
-    for solution_name in ("cursor", "king", "challenger"):
-        sol_paths = build_solution_paths(task_paths, solution_name)
+    _try_upload_json_file(task_paths.task_json_path, f"{prefix}task.json")
+    _try_upload_text_file(task_paths.task_txt_path, f"{prefix}task.txt")
+    _try_upload_text_file(task_paths.reference_patch_path, f"{prefix}reference.patch", "text/x-diff")
+    _try_upload_json_file(task_paths.commit_path, f"{prefix}commit.json")
+
+    canonical_names = ("baseline", "king", "challenger")
+    for canonical in canonical_names:
+        disk_name = labels.get(canonical, canonical)
+        sol_paths = build_solution_paths(task_paths, disk_name)
         _try_upload_text_file(
             sol_paths.solution_diff_path,
-            f"{prefix}solutions/{solution_name}.diff",
+            f"{prefix}solutions/{canonical}.diff",
             "text/x-diff",
         )
+        _try_upload_json_file(
+            sol_paths.solve_json_path,
+            f"{prefix}solutions/{canonical}.solve.json",
+        )
+        _try_upload_gzip_file(
+            sol_paths.rollout_jsonl_path,
+            f"{prefix}solutions/{canonical}.rollout.jsonl.gz",
+        )
 
-    for compare_pair in (
-        ["cursor", "king"],
-        ["cursor", "challenger"],
-        ["king", "challenger"],
-    ):
-        cmp_name = f"{compare_pair[0]}--vs--{compare_pair[1]}"
-        cmp_paths = build_compare_paths(task_paths, cmp_name)
+    compare_pairs = [
+        ("baseline", "king"),
+        ("baseline", "challenger"),
+        ("king", "challenger"),
+    ]
+    for left_canonical, right_canonical in compare_pairs:
+        left_disk = labels.get(left_canonical, left_canonical)
+        right_disk = labels.get(right_canonical, right_canonical)
+        disk_cmp_name = f"{left_disk}--vs--{right_disk}"
+        r2_cmp_name = f"{left_canonical}--vs--{right_canonical}"
+        cmp_paths = build_compare_paths(task_paths, disk_cmp_name)
         _try_upload_json_file(
             cmp_paths.compare_json_path,
-            f"{prefix}comparisons/{cmp_name}.json",
+            f"{prefix}comparisons/{r2_cmp_name}.json",
         )
 
     log.info(
@@ -318,6 +363,7 @@ def publish_duel_index(
 def backfill_duel_to_r2(
     duel_json_path: Path,
     tasks_root: Path,
+    solution_labels: dict[str, str] | None = None,
 ) -> bool:
     """Upload a historical duel and its round artifacts to R2.
 
@@ -340,7 +386,10 @@ def backfill_duel_to_r2(
         if not task_name:
             continue
         try:
-            publish_round_data(duel_id=duel_id, task_name=task_name, tasks_root=tasks_root)
+            publish_round_data(
+                duel_id=duel_id, task_name=task_name,
+                tasks_root=tasks_root, solution_labels=solution_labels,
+            )
         except Exception:
             log.exception(
                 "Backfill: failed to upload round %s for duel %d (non-fatal)",
@@ -349,6 +398,108 @@ def backfill_duel_to_r2(
 
     log.info("Backfilled duel %d from %s", duel_id, duel_json_path)
     return True
+
+
+def publish_training_data(
+    *,
+    duel_id: int,
+    duel_dict: dict[str, Any],
+    tasks_root: Path,
+    solution_labels: dict[str, str] | None = None,
+) -> bool:
+    """Emit a training.jsonl for the duel with one self-contained record per round.
+
+    Each line contains the task prompt, reference diff, all solution diffs,
+    comparison scores, solve metadata, and round outcome -- everything a
+    training pipeline needs without chasing individual artifact files.
+
+    Uploads to: sn66/duels/{duel_id}/training.jsonl
+    """
+    if _get_s3_client() is None:
+        return False
+
+    from workspace import build_solution_paths, build_task_paths
+
+    labels = solution_labels or {}
+    king_before = duel_dict.get("king_before", {})
+    challenger_info = duel_dict.get("challenger", {})
+    lines: list[str] = []
+
+    for round_data in duel_dict.get("rounds", []):
+        task_name = round_data.get("task_name")
+        if not task_name or round_data.get("error"):
+            continue
+
+        task_paths = build_task_paths(tasks_root, task_name)
+        record: dict[str, Any] = {
+            "duel_id": duel_id,
+            "task_name": task_name,
+            "winner": round_data.get("winner"),
+            "king_lines": round_data.get("king_lines", 0),
+            "challenger_lines": round_data.get("challenger_lines", 0),
+            "baseline_lines": round_data.get("baseline_lines", 0),
+            "king_similarity_ratio": round_data.get("king_similarity_ratio", 0.0),
+            "challenger_similarity_ratio": round_data.get("challenger_similarity_ratio", 0.0),
+            "king_challenger_similarity": round_data.get("king_challenger_similarity", 0.0),
+            "king_repo": king_before.get("repo_full_name"),
+            "king_commit_sha": king_before.get("commit_sha"),
+            "challenger_uid": challenger_info.get("uid"),
+            "challenger_repo": challenger_info.get("repo_full_name"),
+            "challenger_commit_sha": challenger_info.get("commit_sha"),
+        }
+
+        def _read_text(p: Path) -> str | None:
+            try:
+                return p.read_text() if p.exists() else None
+            except Exception:
+                return None
+
+        def _read_json(p: Path) -> dict[str, Any] | None:
+            try:
+                return json.loads(p.read_text()) if p.exists() else None
+            except Exception:
+                return None
+
+        task_json = _read_json(task_paths.task_json_path)
+        if task_json:
+            task_inner = task_json.get("task", {})
+            record["repo"] = task_json.get("repo_full_name")
+            record["commit_sha"] = task_json.get("commit_sha")
+            record["task_prompt"] = task_inner.get("prompt_text")
+            record["task_title"] = task_inner.get("title")
+
+        record["reference_diff"] = _read_text(task_paths.reference_patch_path)
+
+        for canonical in ("baseline", "king", "challenger"):
+            disk_name = labels.get(canonical, canonical)
+            sol_paths = build_solution_paths(task_paths, disk_name)
+            record[f"{canonical}_diff"] = _read_text(sol_paths.solution_diff_path)
+
+            solve_json = _read_json(sol_paths.solve_json_path)
+            if solve_json:
+                result = solve_json.get("result", {})
+                record[f"{canonical}_elapsed_s"] = result.get("elapsed_seconds")
+                record[f"{canonical}_model"] = result.get("model")
+                record[f"{canonical}_exit_reason"] = result.get("exit_reason")
+                record[f"{canonical}_tool_calls"] = result.get("tool_calls")
+                usage = result.get("usage_summary") or {}
+                record[f"{canonical}_total_tokens"] = usage.get("total_tokens") or result.get("total_tokens")
+                record[f"{canonical}_cost"] = usage.get("cost") or result.get("cost")
+
+        lines.append(json.dumps(record, separators=(",", ":")))
+
+    if not lines:
+        return False
+
+    body = "\n".join(lines) + "\n"
+    key = f"{_duel_key_prefix(duel_id)}training.jsonl"
+    try:
+        _upload_text(key, body, "application/x-ndjson")
+        log.info("Published training data (%d rounds) for duel %d to R2", len(lines), duel_id)
+        return True
+    except Exception:
+        log.exception("Failed to publish training data for duel %d (non-fatal)", duel_id)
+        return False
 
 
 def fetch_chain_data(netuid: int) -> dict[str, Any] | None:

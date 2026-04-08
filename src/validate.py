@@ -25,6 +25,7 @@ from r2 import (
     publish_duel_data,
     publish_duel_index,
     publish_round_data,
+    publish_training_data,
 )
 from workspace import write_json
 
@@ -195,6 +196,7 @@ class PoolTask:
     cursor_elapsed: float
     king_lines: int
     king_similarity: float
+    baseline_lines: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -207,6 +209,7 @@ class PoolTask:
             cursor_elapsed=float(d["cursor_elapsed"]),
             king_lines=int(d["king_lines"]),
             king_similarity=float(d["king_similarity"]),
+            baseline_lines=int(d.get("baseline_lines", 0)),
         )
 
 
@@ -313,6 +316,7 @@ def _pool_filler_loop(
                 cursor_elapsed=baseline_elapsed,
                 king_lines=king_compare.matched_changed_lines,
                 king_similarity=king_compare.similarity_ratio,
+                baseline_lines=king_compare.total_changed_lines_a,
             ))
             log.info("Pool filler: added %s (pool size: %d)", task_name, pool.size())
 
@@ -395,10 +399,15 @@ def _run_duel(
                 king_challenger_similarity=kc_compare.similarity_ratio,
                 task_root=task.task_root,
                 king_compare_root="", challenger_compare_root=chall_compare.comparison_root,
+                baseline_lines=task.baseline_lines,
             )
 
             try:
-                publish_round_data(duel_id=duel_id, task_name=task.task_name, tasks_root=config.tasks_root)
+                publish_round_data(
+                    duel_id=duel_id, task_name=task.task_name,
+                    tasks_root=config.tasks_root,
+                    solution_labels={"baseline": "baseline", "king": "king", "challenger": solution_label},
+                )
             except Exception:
                 log.exception("R2 round publish failed (non-fatal)")
 
@@ -656,10 +665,19 @@ def validate_loop_run(config: RunConfig) -> ValidateStageResult:
                     # Persist duel
                     duel_dict = duel_result.to_dict()
                     _write_duel(paths, duel_result)
+                    chall_label = f"challenger-{challenger.uid}"
                     try:
                         publish_duel_data(duel_id=duel_result.duel_id, duel_dict=duel_dict)
                     except Exception:
                         log.exception("R2 duel publish failed (non-fatal)")
+                    try:
+                        publish_training_data(
+                            duel_id=duel_result.duel_id, duel_dict=duel_dict,
+                            tasks_root=config.tasks_root,
+                            solution_labels={"baseline": "baseline", "king": "king", "challenger": chall_label},
+                        )
+                    except Exception:
+                        log.exception("R2 training data publish failed (non-fatal)")
                     dashboard_history.append(duel_to_summary(duel_dict))
                     try:
                         publish_duel_index(duel_history=dashboard_history, latest_duel_dict=duel_dict)

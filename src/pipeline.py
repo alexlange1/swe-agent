@@ -72,6 +72,8 @@ class CompareStageResult:
     matched_changed_lines: int
     scored_positions: int
     similarity_ratio: float
+    total_changed_lines_a: int = 0
+    total_changed_lines_b: int = 0
 
 
 @dataclass(slots=True)
@@ -327,6 +329,8 @@ def compare_task_run(*, task_name: str, solution_names: list[str], config: RunCo
         matched_changed_lines=compare_result.matched_changed_lines,
         scored_positions=compare_result.scored_positions,
         similarity_ratio=compare_result.similarity_ratio,
+        total_changed_lines_a=compare_result.total_changed_lines_a,
+        total_changed_lines_b=compare_result.total_changed_lines_b,
     )
 
 
