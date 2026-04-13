@@ -1,31 +1,3 @@
-"""
-Core solver for Bittensor subnet 66 mining.
-
-Competitive edges:
-
-  1. PRE-COMPUTED CONTEXT WITH FILE TREE:
-     Before the first API call we build a complete file tree, extract and
-     grep all identifiers, resolve mentioned file paths, and rank targets
-     by relevance. Claude gets a full map on turn 1 — no exploration waste.
-
-  2. DYNAMIC TIME MANAGEMENT:
-     The validator's actual timeout is min(baseline_elapsed * 2 + 1, 300).
-     We detect the budget from the environment or default conservatively,
-     then set phase gates as fractions of the budget.
-
-  3. GIT DIFF SELF-CHECK:
-     After the main edit phase, we run 'git diff' and inject it as context.
-     Claude verifies coverage of acceptance criteria and catches obvious
-     misses in a single focused turn — much cheaper than a full review.
-
-  4. ABSOLUTE SCORING AWARENESS:
-     Win condition is matched_changed_lines > king_lines (absolute count).
-     The prompt is tuned to maximize matched lines, not minimize diff size.
-
-  5. EDIT RESILIENCE:
-     Per-file error tracking, automatic re-read steering on failure, and
-     smart blocking after repeated failures on the same file.
-"""
 
 import os
 import subprocess
@@ -66,7 +38,7 @@ def _detect_time_budget() -> float:
 
 
 class TauSolver:
-    MAX_READS_BEFORE_EDIT = 3
+    MAX_READS_BEFORE_EDIT = 5
     EDIT_ERROR_THRESHOLD = 2
     MAX_ITERATIONS = 60
     MAX_TOKENS = 16384
@@ -82,7 +54,7 @@ class TauSolver:
         self.hard_exit_s = self.time_budget
         self.slow_start_s = self.time_budget * 0.45
         self.anti_zero_s = self.time_budget * 0.85
-        self.diff_check_cutoff_s = self.time_budget * 0.75
+        self.diff_check_cutoff_s = 25.0  # seconds remaining required to attempt diff check
 
     def _build_client(self) -> anthropic.Anthropic:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "proxy-key")
@@ -202,8 +174,8 @@ class TauSolver:
                     "content": "Continue. Call a tool — do not write narrative text.",
                 })
 
-        # Phase 2: Git diff self-check (if time permits and edits were made)
-        if has_edited and (time.time() - start) < self.diff_check_cutoff_s:
+        # Phase 2: Git diff self-check (if time remains and edits were made)
+        if has_edited and (self.hard_exit_s - (time.time() - start)) > self.diff_check_cutoff_s:
             check_text = self._diff_check(messages, start)
             if check_text:
                 output_lines.append(check_text)
@@ -278,7 +250,7 @@ class TauSolver:
                     new_errors[path] += 1
                 else:
                     edit_made = True
-            elif block.name == "read_file":
+            elif block.name in ("read_file", "grep", "find_files"):
                 read_count += 1
 
         return results, edit_made, read_count, dict(new_errors)
@@ -312,7 +284,13 @@ class TauSolver:
 
             if response.stop_reason == "tool_use":
                 results, _, _, _ = self._run_tools(response, defaultdict(int))
-                # Don't recurse — one fix attempt max
+                # One fix attempt: send results back so model confirms or signals done
+                messages.append({"role": "user", "content": results})
+                confirm = self._call_api_with_retry(messages, start)
+                if confirm:
+                    extra = self._extract_text(confirm)
+                    if extra:
+                        return (text or "") + "\n" + extra
             return text or ""
         except Exception:
             return ""
