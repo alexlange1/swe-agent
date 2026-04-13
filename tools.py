@@ -1,15 +1,3 @@
-"""
-Tool implementations for the tau mining agent.
-
-Provides: bash, read_file, write_file, edit_file, multi_edit
-
-Key improvements over standard implementations:
-- edit_file gives richer diagnostics on failure (shows nearby content)
-- multi_edit allows batching multiple edits in one tool call
-- bash has a tighter timeout (30s) to prevent hanging
-- read_file shows line numbers for easier edit_file targeting
-"""
-
 import os
 import subprocess
 from difflib import SequenceMatcher
@@ -98,6 +86,38 @@ class ToolExecutor:
                 },
             },
             {
+                "name": "grep",
+                "description": (
+                    "Search for a pattern in files. Returns matching lines with file paths and line numbers. "
+                    "Use for locating symbols, functions, or strings across the repo."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "description": "Regex or literal pattern to search for"},
+                        "path": {"type": "string", "description": "Directory or file to search in (default: repo root)"},
+                        "include": {"type": "string", "description": "Glob for file types, e.g. '*.ts' or '*.py'"},
+                        "literal": {"type": "boolean", "description": "If true, treat pattern as literal string (no regex)"},
+                    },
+                    "required": ["pattern"],
+                },
+            },
+            {
+                "name": "find_files",
+                "description": (
+                    "Find files by name pattern in the repo. "
+                    "Use to locate files when you know the name but not the path."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "description": "Filename glob pattern, e.g. '*.ts' or 'config.py'"},
+                        "path": {"type": "string", "description": "Directory to search in (default: repo root)"},
+                    },
+                    "required": ["pattern"],
+                },
+            },
+            {
                 "name": "multi_edit",
                 "description": (
                     "Apply multiple edits to a single file in one call. "
@@ -183,9 +203,11 @@ class ToolExecutor:
                 result = result[: self.MAX_FILE_READ_CHARS] + "\n[... truncated ...]"
             return result
 
-        if len(content) > self.MAX_FILE_READ_CHARS:
-            return content[: self.MAX_FILE_READ_CHARS] + "\n\n[... truncated — file too large ...]"
-        return content
+        lines = content.split("\n")
+        numbered = "\n".join(f"{i + 1}|{line}" for i, line in enumerate(lines))
+        if len(numbered) > self.MAX_FILE_READ_CHARS:
+            return numbered[: self.MAX_FILE_READ_CHARS] + "\n[... truncated — file too large ...]"
+        return numbered
 
     def _run_write_file(self, inp: dict) -> str:
         path = self.resolve_path(inp["path"])
@@ -260,6 +282,62 @@ class ToolExecutor:
         if errors:
             parts.append("Errors: " + "; ".join(errors))
         return ". ".join(parts)
+
+    def _run_grep(self, inp: dict) -> str:
+        pattern = inp["pattern"]
+        search_path = inp.get("path", ".")
+        include = inp.get("include", "")
+        literal = inp.get("literal", False)
+
+        cmd = ["grep", "-rn", "--color=never",
+               "--exclude-dir=node_modules", "--exclude-dir=.git",
+               "--exclude-dir=__pycache__", "--exclude-dir=dist",
+               "--exclude-dir=build", "--exclude-dir=.next",
+               "--exclude-dir=target", "--exclude-dir=vendor"]
+        if literal:
+            cmd.append("-F")
+        if include:
+            cmd += ["--include", include]
+        cmd += [pattern, search_path]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True, text=True,
+                timeout=15, cwd=self.repo_path,
+            )
+            output = result.stdout
+            if not output.strip():
+                return f"(no matches for '{pattern}')"
+            return output[: self.MAX_OUTPUT_CHARS]
+        except subprocess.TimeoutExpired:
+            return "[tool-error] grep timed out"
+        except Exception as e:
+            return f"[tool-error] grep: {e}"
+
+    def _run_find_files(self, inp: dict) -> str:
+        pattern = inp["pattern"]
+        search_path = inp.get("path", ".")
+
+        cmd = ["find", search_path, "-type", "f", "-name", pattern,
+               "!", "-path", "*/.git/*",
+               "!", "-path", "*/node_modules/*",
+               "!", "-path", "*/__pycache__/*"]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True, text=True,
+                timeout=10, cwd=self.repo_path,
+            )
+            output = result.stdout.strip()
+            if not output:
+                return f"(no files matching '{pattern}')"
+            return output[: self.MAX_OUTPUT_CHARS]
+        except subprocess.TimeoutExpired:
+            return "[tool-error] find timed out"
+        except Exception as e:
+            return f"[tool-error] find: {e}"
 
     def _edit_not_found_diagnostic(self, path: str, content: str, old_string: str) -> str:
         """Rich diagnostic when edit_file can't find old_string."""
