@@ -228,10 +228,48 @@ def resolve_file_paths(mentioned_paths: list[str], file_tree: list[str]) -> list
     return resolved
 
 
+_PRELOAD_MAX_BYTES_PER_FILE = 40_000
+_PRELOAD_MAX_BYTES_TOTAL = 80_000
+_PRELOAD_TOP_N = 3
+
+
+def preload_files(top_files: list[tuple[str, int]], repo_path: str) -> dict[str, str]:
+    """Read the top-ranked files and return {relative_path: content}.
+
+    Skips files that are binary, missing, or too large. Total preloaded
+    content is capped at _PRELOAD_MAX_BYTES_TOTAL to keep the prompt lean.
+    """
+    preloaded: dict[str, str] = {}
+    total_bytes = 0
+
+    for rel_path, _ in top_files[:_PRELOAD_TOP_N]:
+        full_path = os.path.join(repo_path, rel_path)
+        if not os.path.isfile(full_path):
+            continue
+        try:
+            size = os.path.getsize(full_path)
+            if size > _PRELOAD_MAX_BYTES_PER_FILE:
+                continue
+            if total_bytes + size > _PRELOAD_MAX_BYTES_TOTAL:
+                break
+            with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
+                content = fh.read()
+            preloaded[rel_path] = content
+            total_bytes += len(content.encode("utf-8"))
+        except OSError:
+            continue
+
+    return preloaded
+
+
 def build_recon_context(task_prompt: str, repo_path: str) -> str:
     """
     Full pre-LLM recon. Returns context string for prompt injection.
     Runs everything in parallel where possible. Target: < 5 seconds total.
+
+    The top-ranked files are pre-read and their full contents are included
+    under '## Pre-loaded files'. The model can call edit_file directly on
+    those files without a read_file round-trip.
     """
     parts: list[str] = []
 
@@ -270,6 +308,7 @@ def build_recon_context(task_prompt: str, repo_path: str) -> str:
         for f in files:
             file_freq[f] += 1
 
+    top_files: list[tuple[str, int]] = []
     if file_freq:
         top_files = file_freq.most_common(8)
         parts.append("\nRANKED TARGET FILES (start here):")
@@ -288,5 +327,20 @@ def build_recon_context(task_prompt: str, repo_path: str) -> str:
             parts.append(f"  {f}")
         if len(file_tree) > len(tree_sample):
             parts.append(f"  ... and {len(file_tree) - len(tree_sample)} more files")
+
+    # Pre-load top files so the model can edit without a read_file round-trip.
+    if top_files:
+        preloaded = preload_files(top_files, repo_path)
+        if preloaded:
+            parts.append(
+                "\n## Pre-loaded file contents"
+                "\nThese files are already available — call edit_file directly"
+                " without reading them first. Match indentation, quotes, and"
+                " style exactly."
+            )
+            for rel_path, content in preloaded.items():
+                lines = content.splitlines()
+                numbered = "\n".join(f"{i + 1}|{line}" for i, line in enumerate(lines))
+                parts.append(f"\n### {rel_path}\n```\n{numbered}\n```")
 
     return "\n".join(parts)

@@ -43,25 +43,30 @@ TWO FAILURE MODES — avoid both:
 1. BLOAT: you touched lines the reference did not → denominator grows, time wasted.
 2. DRIFT: correct lines but wrong whitespace, quotes, or naming → zero matches per line.
 
+PRE-LOADED FILES:
+The context includes full file contents under "## Pre-loaded file contents".
+For those files: call edit_file DIRECTLY — skip read_file entirely.
+Use the numbered content to construct exact old_string/new_string pairs.
+Only call read_file for files NOT pre-loaded or when an edit fails.
+
 WORKFLOW:
-1. Read the pre-computed context. Ranked target files are already listed — start there.
-2. Read each target file in full (read_file, whole file). Read no other files.
-3. Edit immediately (edit_file, exact old_string/new_string).
+1. Check "## Pre-loaded file contents" in the context — those files are ready to edit.
+2. Call edit_file immediately on the pre-loaded files. No read_file first.
+3. For files not pre-loaded: read_file once, then edit_file immediately.
 4. Files in alphabetical path order, edits top-to-bottom within each file.
 5. Cover every acceptance criterion — each maps to a reference change.
 6. Stop. No re-reads, no tests, no summaries.
 
 TOOLS:
-- grep: preferred over bash for searching — use for locating symbols across files.
-- find_files: preferred over bash for file lookup by name pattern.
-- read_file: always read the full file before editing. Use start_line/end_line only for huge files.
 - edit_file: preferred for all changes. Narrowest possible old_string.
 - multi_edit: batch several changes to one file in one call.
+- read_file: only for files not already pre-loaded in context.
+- grep: for locating symbols when a file is not pre-loaded.
+- find_files: file lookup by name pattern.
 - write_file: only for genuinely new files the task requires creating.
-- bash: use sparingly — max 3 bash/grep/find calls total before you must edit.
+- bash: use sparingly — max 3 bash calls total before you must edit.
 
-STYLE DETECTION — before editing each file:
-When you read a file, note from the first 20 lines:
+STYLE DETECTION — from the pre-loaded content, note before editing:
 - Indentation: tabs or spaces? 2 or 4 spaces?
 - Quotes: single or double?
 - Semicolons: present or absent?
@@ -75,18 +80,16 @@ EDIT PRECISION:
 - Do not re-indent surrounding code, ever.
 - Preserve trailing newlines and EOF behavior exactly as the original file.
 - edit_file fails → re-read the file before retrying. Never retry from memory.
-- Append new entries to the END of existing lists, switches, enums, or OR-chains — the reference appends at end too.
+- Append new entries to the END of existing lists, switches, enums, or OR-chains.
 - String literals: copy verbatim from the task description. Do not paraphrase or expand.
 
 SIBLING FILE CHECK:
 After editing a file, check if sibling files in the same directory also need editing.
-Run bash("ls <dirname>/") to see all files in that folder.
 
 SCOPE SANITY CHECK:
 Count acceptance criteria bullets. Each typically needs at least one edit.
 4+ criteria almost always mean edits across 2+ files.
-Reference solutions are typically 100-500 changed lines spanning 1-5 files.
-"configure" or "update settings" usually means config file AND source code changes — do not stop after only one.
+"configure" or "update settings" usually means config file AND source code changes.
 "X and also Y" = both halves must be edited.
 
 ANTI-ZERO RULE:

@@ -31,6 +31,7 @@ import os
 import subprocess
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 import anthropic
@@ -69,7 +70,7 @@ class TauSolver:
     MAX_READS_BEFORE_EDIT = 5
     EDIT_ERROR_THRESHOLD = 2
     MAX_ITERATIONS = 60
-    MAX_TOKENS = 16384
+    MAX_TOKENS = 6144
     PROVIDER_RETRY_MAX = 2
 
     def __init__(self, repo_path: str, model: str = "docker-proxy-model") -> None:
@@ -82,7 +83,9 @@ class TauSolver:
         self.hard_exit_s = self.time_budget
         self.slow_start_s = self.time_budget * 0.45
         self.anti_zero_s = self.time_budget * 0.85
-        self.diff_check_cutoff_s = 25.0  # seconds remaining required to attempt diff check
+        # Only run diff check if at least this many seconds remain.
+        # Raised from 25s: the check itself costs one API call (~10-15s).
+        self.diff_check_cutoff_s = 40.0
 
     def _build_client(self) -> anthropic.Anthropic:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "proxy-key")
@@ -242,43 +245,71 @@ class TauSolver:
     def _run_tools(
         self, response: anthropic.types.Message, edit_errors: dict[str, int]
     ) -> tuple[list[dict], bool, int, dict[str, int]]:
-        """Returns (results, any_edit_made, read_count, new_file_errors)."""
+        """Returns (results, any_edit_made, read_count, new_file_errors).
+
+        Read-only tool calls (read_file, grep, find_files) are executed in
+        parallel. Write operations (edit_file, write_file, bash, multi_edit)
+        are executed serially after all reads complete so ordering is safe.
+        """
+        tool_blocks = [b for b in response.content if b.type == "tool_use"]
+
+        # Separate reads (parallelisable) from writes (serial).
+        _READ_TOOLS = frozenset({"read_file", "grep", "find_files"})
+        _WRITE_TOOLS = frozenset({"edit_file", "write_file", "multi_edit", "bash"})
+
+        read_blocks = [b for b in tool_blocks if b.name in _READ_TOOLS]
+        other_blocks = [b for b in tool_blocks if b.name not in _READ_TOOLS]
+
+        # Map tool_use_id → output for ordering.
+        outputs: dict[str, str] = {}
+
+        # Execute reads in parallel.
+        if read_blocks:
+            with ThreadPoolExecutor(max_workers=min(4, len(read_blocks))) as pool:
+                futures = {
+                    pool.submit(self.tools.execute, b.name, b.input): b.id
+                    for b in read_blocks
+                }
+                for future in as_completed(futures):
+                    bid = futures[future]
+                    try:
+                        outputs[bid] = future.result()
+                    except Exception as exc:
+                        outputs[bid] = f"[tool-error] {exc}"
+
+        # Execute writes serially (order matters).
+        for block in other_blocks:
+            if block.name in ("edit_file", "write_file"):
+                path = block.input.get("path", "")
+                if edit_errors.get(path, 0) >= self.EDIT_ERROR_THRESHOLD:
+                    outputs[block.id] = (
+                        f"[blocked] Too many failed edits on '{path}'. "
+                        f"Re-read it first or try write_file to replace entirely."
+                    )
+                    continue
+            outputs[block.id] = self.tools.execute(block.name, block.input)
+
+        # Reconstruct results in original order.
         results = []
         edit_made = False
         read_count = 0
         new_errors: dict[str, int] = defaultdict(int)
 
-        for block in response.content:
-            if block.type != "tool_use":
-                continue
-
-            if block.name in ("edit_file", "write_file"):
-                path = block.input.get("path", "")
-                if edit_errors.get(path, 0) >= self.EDIT_ERROR_THRESHOLD:
-                    results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": (
-                            f"[blocked] Too many failed edits on '{path}'. "
-                            f"Re-read it first or try write_file to replace entirely."
-                        ),
-                    })
-                    continue
-
-            output = self.tools.execute(block.name, block.input)
+        for block in tool_blocks:
+            output = outputs.get(block.id, "[tool-error] output missing")
             results.append({
                 "type": "tool_result",
                 "tool_use_id": block.id,
                 "content": output,
             })
-
-            if block.name in ("write_file", "edit_file"):
-                if output.startswith("[tool-error]"):
+            if block.name in ("write_file", "edit_file", "multi_edit"):
+                if output.startswith("[tool-error]") or output.startswith("[blocked]"):
                     path = block.input.get("path", "")
-                    new_errors[path] += 1
+                    if not output.startswith("[blocked]"):
+                        new_errors[path] += 1
                 else:
                     edit_made = True
-            elif block.name in ("read_file", "grep", "find_files"):
+            elif block.name in _READ_TOOLS:
                 read_count += 1
 
         return results, edit_made, read_count, dict(new_errors)
