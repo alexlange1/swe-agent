@@ -121,10 +121,15 @@ class TauSolver:
 
         # Phase 0: Pre-LLM reconnaissance (2-5s, no API calls)
         recon_context = ""
+        ranked_targets: list[str] = []
         try:
-            recon_context = build_recon_context(task_prompt, self.repo_path)
+            recon_context, ranked_targets = build_recon_context(task_prompt, self.repo_path)
         except Exception:
             pass
+
+        # Dynamic explore ceiling: proportional to number of ranked targets found.
+        # max(3, min(targets+1, 8)) mirrors viper-agent's approach.
+        dynamic_ceiling = max(3, min(len(ranked_targets) + 1, 8)) if ranked_targets else self.MAX_READS_BEFORE_EDIT
 
         # Phase 1: Main solving loop
         messages: list[dict] = [
@@ -139,6 +144,12 @@ class TauSolver:
         slow_warned = False
         anti_zero_fired = False
         edit_errors: dict[str, int] = defaultdict(int)
+
+        # Breadth-first tracking
+        edited_paths: set[str] = set()
+        path_read_counts: dict[str, int] = defaultdict(int)
+        reread_warned: set[str] = set()
+        breadth_nudge_sent = False
 
         for iteration in range(self.MAX_ITERATIONS):
             elapsed = time.time() - start
@@ -158,7 +169,7 @@ class TauSolver:
                     f"and you have no edits yet. " + TIME_WARNING_PROMPT
                 )})
 
-            if reads_without_edit >= self.MAX_READS_BEFORE_EDIT:
+            if reads_without_edit >= dynamic_ceiling:
                 messages.append({"role": "user", "content": FORCE_EDIT_PROMPT})
                 reads_without_edit = 0
 
@@ -176,15 +187,48 @@ class TauSolver:
                 break
 
             if response.stop_reason == "tool_use":
-                tool_results, edit_made, read_count, file_edit_errors = (
+                tool_results, edit_made, read_count, file_edit_errors, newly_edited, newly_read = (
                     self._run_tools(response, edit_errors)
                 )
+
+                # Track breadth state
+                edited_paths.update(newly_edited)
+                for p in newly_read:
+                    path_read_counts[p] += 1
 
                 if edit_made:
                     has_edited = True
                     reads_without_edit = 0
+
+                    # Breadth-first nudge: after first edit, list remaining ranked targets
+                    if not breadth_nudge_sent and ranked_targets:
+                        remaining_targets = [
+                            t for t in ranked_targets if t not in edited_paths
+                        ]
+                        if remaining_targets:
+                            breadth_nudge_sent = True
+                            tool_results.append({
+                                "type": "text",
+                                "text": (
+                                    f"Good edit. Unedited ranked targets: "
+                                    + ", ".join(f"`{t}`" for t in remaining_targets[:5])
+                                    + ". Move to the next file now — breadth beats depth."
+                                ),
+                            })
                 else:
                     reads_without_edit += read_count
+
+                # Re-read warnings: if model reads same file 3+ times, warn it
+                for p, cnt in path_read_counts.items():
+                    if cnt >= 3 and p not in reread_warned:
+                        reread_warned.add(p)
+                        tool_results.append({
+                            "type": "text",
+                            "text": (
+                                f"WARNING: You have read `{p}` {cnt} times. "
+                                f"Stop re-reading it. Either edit it now or move to the next file."
+                            ),
+                        })
 
                 for path, count in file_edit_errors.items():
                     edit_errors[path] += count
@@ -244,8 +288,8 @@ class TauSolver:
 
     def _run_tools(
         self, response: anthropic.types.Message, edit_errors: dict[str, int]
-    ) -> tuple[list[dict], bool, int, dict[str, int]]:
-        """Returns (results, any_edit_made, read_count, new_file_errors).
+    ) -> tuple[list[dict], bool, int, dict[str, int], set[str], list[str]]:
+        """Returns (results, any_edit_made, read_count, new_file_errors, newly_edited, newly_read).
 
         Read-only tool calls (read_file, grep, find_files) are executed in
         parallel. Write operations (edit_file, write_file, bash, multi_edit)
@@ -294,6 +338,8 @@ class TauSolver:
         edit_made = False
         read_count = 0
         new_errors: dict[str, int] = defaultdict(int)
+        newly_edited: set[str] = set()
+        newly_read: list[str] = []
 
         for block in tool_blocks:
             output = outputs.get(block.id, "[tool-error] output missing")
@@ -309,10 +355,18 @@ class TauSolver:
                         new_errors[path] += 1
                 else:
                     edit_made = True
+                    path = block.input.get("path", "")
+                    if path:
+                        newly_edited.add(path)
+            elif block.name == "read_file":
+                read_count += 1
+                path = block.input.get("path", "")
+                if path:
+                    newly_read.append(path)
             elif block.name in _READ_TOOLS:
                 read_count += 1
 
-        return results, edit_made, read_count, dict(new_errors)
+        return results, edit_made, read_count, dict(new_errors), newly_edited, newly_read
 
     def _diff_check(self, prior_messages: list[dict], start: float) -> str:
         """Run git diff and let Claude verify coverage in one focused turn."""
@@ -342,7 +396,7 @@ class TauSolver:
             messages.append({"role": "assistant", "content": response.content})
 
             if response.stop_reason == "tool_use":
-                results, _, _, _ = self._run_tools(response, defaultdict(int))
+                results, _, _, _, _, _ = self._run_tools(response, defaultdict(int))
                 # One fix attempt: send results back so model confirms or signals done
                 messages.append({"role": "user", "content": results})
                 confirm = self._call_api_with_retry(messages, start)

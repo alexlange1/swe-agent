@@ -124,6 +124,16 @@ def extract_identifiers(text: str) -> list[str]:
     for m in re.finditer(r"\b[a-z][a-z0-9]*\.[a-z_][a-z0-9_.]*\b", text):
         found.append(m.group(0))
 
+    # kebab-case identifiers (e.g. my-component, user-profile)
+    for m in re.finditer(r"\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+\b", text):
+        found.append(m.group(0))
+
+    # path-like tokens (e.g. src/utils/foo, api/routes/user)
+    for m in re.finditer(r"(?:/|\b)(?:[\w.-]+/)+[\w.-]+\b", text):
+        token = m.group(0).lstrip("/").strip()
+        if len(token) >= 4:
+            found.append(token)
+
     seen = set()
     result = []
     for ident in found:
@@ -134,6 +144,20 @@ def extract_identifiers(text: str) -> list[str]:
         result.append(ident)
 
     return result
+
+
+def count_acceptance_criteria(text: str) -> int:
+    """Count bullet-point acceptance criteria in a task description."""
+    section = re.search(
+        r"(?:acceptance\s+criteria|requirements):?\s*\n([\s\S]*?)(?:\n\n|\n(?=[A-Z])|\n(?=##)|$)",
+        text, re.IGNORECASE,
+    )
+    if section:
+        bullets = re.findall(r"^\s*[-*•]\s+", section.group(1), re.MULTILINE)
+        return len(bullets)
+    # Fallback: count any bullet lines in the whole text
+    bullets = re.findall(r"^\s*[-*•]\s+\S", text, re.MULTILINE)
+    return len(bullets)
 
 
 def detect_repo_info(repo_path: str) -> dict:
@@ -262,9 +286,9 @@ def preload_files(top_files: list[tuple[str, int]], repo_path: str) -> dict[str,
     return preloaded
 
 
-def build_recon_context(task_prompt: str, repo_path: str) -> str:
+def build_recon_context(task_prompt: str, repo_path: str) -> tuple[str, list[str]]:
     """
-    Full pre-LLM recon. Returns context string for prompt injection.
+    Full pre-LLM recon. Returns (context_string, ranked_target_paths).
     Runs everything in parallel where possible. Target: < 5 seconds total.
 
     The top-ranked files are pre-read and their full contents are included
@@ -283,6 +307,7 @@ def build_recon_context(task_prompt: str, repo_path: str) -> str:
     file_tree = get_file_tree(repo_path, max_files=300)
     mentioned_paths = extract_file_paths(task_prompt)
     identifiers = extract_identifiers(task_prompt)
+    criteria_count = count_acceptance_criteria(task_prompt)
 
     file_map: dict[str, list[str]] = {}
     if identifiers:
@@ -290,10 +315,20 @@ def build_recon_context(task_prompt: str, repo_path: str) -> str:
 
     resolved_paths = resolve_file_paths(mentioned_paths, file_tree) if mentioned_paths else []
 
+    # Task scope analysis (from criteria count + named files)
+    scope_lines: list[str] = []
+    if criteria_count > 0:
+        scope_lines.append(f"This task has {criteria_count} acceptance criteria.")
+        if criteria_count >= 3:
+            scope_lines.append(
+                f"Tasks with {criteria_count}+ criteria almost always require "
+                f"edits across multiple files. Do NOT stop after editing one file."
+            )
     if resolved_paths:
-        parts.append("\nFiles explicitly mentioned in task (verified in repo):")
-        for p in resolved_paths[:8]:
-            parts.append(f"  {p}")
+        named = ", ".join(f"`{p}`" for p in resolved_paths[:6])
+        scope_lines.append(f"Files explicitly named in task: {named}. Each likely needs an edit.")
+    if scope_lines:
+        parts.append("\n## Task scope\n" + "\n".join(scope_lines))
 
     if file_map:
         parts.append("\nIdentifier locations (pre-grepped):")
@@ -343,4 +378,5 @@ def build_recon_context(task_prompt: str, repo_path: str) -> str:
                 numbered = "\n".join(f"{i + 1}|{line}" for i, line in enumerate(lines))
                 parts.append(f"\n### {rel_path}\n```\n{numbered}\n```")
 
-    return "\n".join(parts)
+    ranked_paths = [f for f, _ in top_files]
+    return "\n".join(parts), ranked_paths

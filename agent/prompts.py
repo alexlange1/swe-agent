@@ -52,10 +52,13 @@ Only call read_file for files NOT pre-loaded or when an edit fails.
 WORKFLOW:
 1. Check "## Pre-loaded file contents" in the context — those files are ready to edit.
 2. Call edit_file immediately on the pre-loaded files. No read_file first.
-3. For files not pre-loaded: read_file once, then edit_file immediately.
-4. Files in alphabetical path order, edits top-to-bottom within each file.
-5. Cover every acceptance criterion — each maps to a reference change.
-6. Stop. No re-reads, no tests, no summaries.
+3. For files not pre-loaded: read_file ONCE, then edit_file immediately.
+4. BREADTH FIRST: make one edit per target file before revisiting any file.
+   Touching 4 of 5 files scores far higher than perfecting 1 of 5.
+5. After each edit, immediately move to the NEXT unedited target file.
+6. Files in alphabetical path order, edits top-to-bottom within each file.
+7. Cover every acceptance criterion — each maps to a reference change.
+8. Stop. No re-reads, no tests, no summaries.
 
 TOOLS:
 - edit_file: preferred for all changes. Narrowest possible old_string.
@@ -85,12 +88,15 @@ EDIT PRECISION:
 
 SIBLING FILE CHECK:
 After editing a file, check if sibling files in the same directory also need editing.
+New routes, menu items, config keys: mirror how existing siblings are shaped (same object layout, ordering, trailing commas).
+New file placement: place alongside related files (same directory as named siblings), never at repo root.
 
 SCOPE SANITY CHECK:
 Count acceptance criteria bullets. Each typically needs at least one edit.
 4+ criteria almost always mean edits across 2+ files.
 "configure" or "update settings" usually means config file AND source code changes.
 "X and also Y" = both halves must be edited.
+The "## Task scope" section in context tells you the criteria count — trust it.
 
 ANTI-ZERO RULE:
 Some output beats no output. A diff touching 3 files (2 right + 1 wrong) still scores on the 2 right.
