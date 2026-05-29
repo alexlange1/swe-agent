@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, type Subnet } from "@/lib/api";
 import { AgapBadge, Flow, Pct } from "./ui";
+import { useWatchlist } from "@/lib/watchlist";
 
 const SORTS = [
   ["agap", "aGap"],
@@ -13,12 +14,19 @@ const SORTS = [
   ["market_cap", "Mkt Cap"],
 ];
 
-export function Leaderboard({ onSelect }: { onSelect: (n: number) => void }) {
+export function Leaderboard({
+  onSelect,
+  watchOnly = false,
+}: {
+  onSelect: (n: number) => void;
+  watchOnly?: boolean;
+}) {
   const [rows, setRows] = useState<Subnet[]>([]);
   const [sort, setSort] = useState("agap");
   const [whalesOnly, setWhalesOnly] = useState(false);
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
+  const { has, toggle, list } = useWatchlist();
 
   useEffect(() => {
     setLoading(true);
@@ -30,12 +38,14 @@ export function Leaderboard({ onSelect }: { onSelect: (n: number) => void }) {
   }, [sort, whalesOnly]);
 
   const filtered = useMemo(() => {
-    if (!q.trim()) return rows;
-    const t = q.toLowerCase();
-    return rows.filter(
-      (r) => r.name.toLowerCase().includes(t) || String(r.netuid).includes(t)
-    );
-  }, [rows, q]);
+    let r = rows;
+    if (watchOnly) r = r.filter((x) => list.includes(x.netuid));
+    if (q.trim()) {
+      const t = q.toLowerCase();
+      r = r.filter((x) => x.name.toLowerCase().includes(t) || String(x.netuid).includes(t));
+    }
+    return r;
+  }, [rows, q, watchOnly, list]);
 
   return (
     <div>
@@ -104,7 +114,22 @@ export function Leaderboard({ onSelect }: { onSelect: (n: number) => void }) {
               <div className="hidden font-mono text-xs text-slate-500 md:col-span-1 md:block">
                 {i + 1}
               </div>
-              <div className="col-span-1 flex items-center gap-3 md:col-span-4">
+              <div className="col-span-1 flex items-center gap-2 md:col-span-4">
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggle(s.netuid);
+                  }}
+                  className={
+                    "shrink-0 cursor-pointer text-sm " +
+                    (has(s.netuid) ? "text-alpha-400" : "text-slate-600 hover:text-slate-300")
+                  }
+                  title={has(s.netuid) ? "Unwatch" : "Add to watchlist"}
+                >
+                  {has(s.netuid) ? "★" : "☆"}
+                </span>
                 <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-alpha-500/10 text-sm font-bold text-alpha-400">
                   {s.symbol}
                 </span>

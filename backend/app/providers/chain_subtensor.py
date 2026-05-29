@@ -40,7 +40,12 @@ _MAPS = [
     "TokenSymbol",
     "SubnetIdentitiesV3",
     "SubnetOwner",
+    "Burn",
+    "NetworkRegisteredAt",
+    "Tempo",
 ]
+
+_BLOCK_SECONDS = 12.0
 
 
 def _to_str(v) -> str | None:
@@ -85,9 +90,17 @@ class SubtensorChainProvider:
                 continue
         return out
 
+    def current_block(self) -> int:
+        s = self._connect()
+        try:
+            return int(s.get_block_number(s.get_chain_head()))
+        except Exception:
+            return 0
+
     def chain_data(self, netuids: list[int]) -> dict[int, ChainData]:
         s = self._connect()
         data = {name: self._map(s, name) for name in _MAPS}
+        block = self.current_block()
 
         tao = data["SubnetTAO"]
         alpha_in = data["SubnetAlphaIn"]
@@ -97,9 +110,13 @@ class SubtensorChainProvider:
         flow = data["SubnetProtocolFlow"]
         neurons = data["SubnetworkN"]
         permits = data["ValidatorPermit"]
+        maxval = data["MaxAllowedValidators"]
         symbols = data["TokenSymbol"]
         idents = data["SubnetIdentitiesV3"]
         owners = data["SubnetOwner"]
+        burn = data["Burn"]
+        registered = data["NetworkRegisteredAt"]
+        tempo = data["Tempo"]
 
         # First pass: spot prices for every subnet (needed for emission weight).
         prices: dict[int, float] = {}
@@ -121,6 +138,8 @@ class SubtensorChainProvider:
             total_neurons = int(neurons.get(n) or (len(permit) if isinstance(permit, list) else 0))
             ident = idents.get(n) or {}
             gh = _to_str(ident.get("github_repo")) if isinstance(ident, dict) else None
+            reg_block = registered.get(n) or 0
+            age_days = round(max(0, (block - reg_block)) * _BLOCK_SECONDS / 86400.0, 1) if block and reg_block else 0.0
 
             out[n] = ChainData(
                 netuid=n,
@@ -133,8 +152,12 @@ class SubtensorChainProvider:
                 volume_24h_tao=round((volume.get(n) or 0) / RAO, 4),
                 validators=validators,
                 miners=max(0, total_neurons - validators),
-                nakamoto_coefficient=0,  # unknown without stake distribution; 0 = n/a
+                max_validators=int(maxval.get(n) or 0),
+                nakamoto_coefficient=0,  # computed on-demand (see decentralization())
                 net_tao_flow=round((flow.get(n) or 0) / RAO, 4),
+                registration_cost_tao=round((burn.get(n) or 0) / RAO, 6),
+                age_days=age_days,
+                tempo=int(tempo.get(n) or 0),
                 name=(_to_str(ident.get("subnet_name")) if isinstance(ident, dict) else None),
                 symbol=_to_str(symbols.get(n)),
                 github=gh,
@@ -147,3 +170,51 @@ class SubtensorChainProvider:
             raise RuntimeError("subtensor chain returned no subnets")
         log.info("subtensor: fetched %d subnets from %s", len(out), self.endpoint)
         return out
+
+    def decentralization(self, netuid: int, top_n: int = 12) -> dict:
+        """Compute REAL stake concentration for one subnet (on-demand).
+
+        Reads each validator's alpha stake (``TotalHotkeyAlpha``) and returns the
+        Nakamoto coefficient (min validators controlling >50% of validator stake) plus
+        the top validators by stake share. ~1-2s for one subnet; not run in bulk scans.
+        """
+        s = self._connect()
+        permit = s.query("SubtensorModule", "ValidatorPermit", [netuid]).value
+        keys = {int(u.value): k.value for u, k in
+                s.query_map("SubtensorModule", "Keys", [netuid], page_size=300)}
+        val_uids = [u for u, p in enumerate(permit) if p]
+
+        stakes: list[tuple[int, str, float]] = []  # (uid, hotkey, alpha)
+        for uid in val_uids:
+            hk = keys.get(uid)
+            if not hk:
+                continue
+            try:
+                a = s.query("SubtensorModule", "TotalHotkeyAlpha", [hk, netuid]).value or 0
+            except Exception:
+                a = 0
+            stakes.append((uid, hk, a / RAO))
+
+        stakes.sort(key=lambda t: t[2], reverse=True)
+        total = sum(a for _, _, a in stakes) or 1.0
+
+        # Nakamoto: smallest set of top validators summing > 50% of stake.
+        nakamoto, cum = 0, 0.0
+        for _, _, a in stakes:
+            cum += a
+            nakamoto += 1
+            if cum > total / 2:
+                break
+
+        top = [
+            {"uid": uid, "hotkey": hk, "stake_alpha": round(a, 4),
+             "stake_pct": round(a / total * 100, 2)}
+            for uid, hk, a in stakes[:top_n]
+        ]
+        return {
+            "netuid": netuid,
+            "validators": len(val_uids),
+            "nakamoto_coefficient": nakamoto,
+            "total_validator_stake_alpha": round(total, 4),
+            "top_validators": top,
+        }

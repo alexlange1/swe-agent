@@ -59,14 +59,22 @@ Read directly from `SubtensorModule` storage:
 - **Validator / miner counts**: `ValidatorPermit` (count of `true`) and `SubnetworkN`.
 - **Net capital flow**: `SubnetProtocolFlow` — real net TAO flowing into each pool, our
   on-chain smart-money signal.
+- **Lifecycle / economics**: registration cost (`Burn`), subnet age
+  (`NetworkRegisteredAt` vs current block), and `Tempo`.
 - **On-chain identity**: `SubnetIdentitiesV3` + `TokenSymbol` give the authoritative
   **name, symbol, GitHub repo, Discord, website, owner, and description** for each
   subnet. This *replaces* a hand-curated registry — the chain is the source of truth and
   is also where we get each team's GitHub repo for the development scan.
+- **Decentralization (on-demand)**: the **Nakamoto coefficient** (smallest set of
+  validators controlling >50% of stake) and top validators by stake share are computed
+  live from `ValidatorPermit` + `Keys` + `TotalHotkeyAlpha` for a single subnet (~1-2s).
+  It's run on demand (per subnet detail view), not in the bulk scan, because it needs the
+  per-validator stake distribution. Real numbers or nothing — never guessed.
 
-> Nakamoto coefficient (stake-concentration) needs the full per-validator stake
-> distribution; until that heavier query is wired it is reported as `n/a` rather than
-> guessed.
+### 2.3 USD pricing
+
+TAO/USD is read from CoinGecko's public endpoint (cached 5 min) to render USD values
+alongside TAO. No key; returns `null` (TAO-only) on failure rather than a fake price.
 
 ---
 

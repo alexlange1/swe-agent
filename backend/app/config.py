@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     oracle_model: str = "anthropic/claude-3.5-sonnet"
 
+    # Telegram alerts (optional)
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+
     # Scan behaviour
     scan_interval_minutes: int = 15
     scan_on_startup: bool = True
@@ -48,6 +52,10 @@ class Settings(BaseSettings):
     @property
     def has_llm(self) -> bool:
         return bool(self.openrouter_api_key or self.anthropic_api_key)
+
+    @property
+    def has_telegram(self) -> bool:
+        return bool(self.telegram_bot_token and self.telegram_chat_id)
 
 
 @lru_cache

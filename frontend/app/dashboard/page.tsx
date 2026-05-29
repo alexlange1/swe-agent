@@ -8,13 +8,18 @@ import { Feed } from "@/components/dashboard/Feed";
 import { Whales } from "@/components/dashboard/Whales";
 import { WalletTracker } from "@/components/dashboard/WalletTracker";
 import { SubnetDetail } from "@/components/dashboard/SubnetDetail";
+import { Overview } from "@/components/dashboard/Overview";
+import { Alerts } from "@/components/dashboard/Alerts";
 import { OracleDemo } from "@/components/landing/OracleDemo";
 
 const TABS = [
+  ["overview", "🌐 Overview"],
   ["leaderboard", "📊 Leaderboard"],
+  ["watchlist", "★ Watchlist"],
   ["feed", "🧠 AI Feed"],
-  ["whales", "🐋 Whales"],
+  ["whales", "🐋 Capital Flow"],
   ["wallet", "🔍 Wallet Tracker"],
+  ["alerts", "🔔 Alerts"],
   ["oracle", "🔮 TAO Oracle"],
 ];
 
@@ -75,10 +80,13 @@ function DashboardInner() {
       </div>
 
       <div className="mt-6">
+        {tab === "overview" && <Overview />}
         {tab === "leaderboard" && <Leaderboard onSelect={setSelected} />}
+        {tab === "watchlist" && <Leaderboard onSelect={setSelected} watchOnly />}
         {tab === "feed" && <Feed />}
         {tab === "whales" && <Whales />}
         {tab === "wallet" && <WalletTracker />}
+        {tab === "alerts" && <Alerts />}
         {tab === "oracle" && (
           <div className="mx-auto max-w-2xl">
             <OracleDemo />

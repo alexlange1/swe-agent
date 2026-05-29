@@ -136,6 +136,7 @@ def run_scan(settings: Settings | None = None, max_signals_with_ai: int = 12) ->
             ))
             history_rows.append(PriceHistory(
                 netuid=n, price_tao=c.price_tao, emission_share=c.emission_share,
+                agap_score=sc.agap, net_tao_flow=c.net_tao_flow,
             ))
 
             if d:
@@ -161,6 +162,15 @@ def run_scan(settings: Settings | None = None, max_signals_with_ai: int = 12) ->
         cutoff = datetime.now(timezone.utc) - timedelta(days=_HISTORY_RETENTION_DAYS)
         session.exec(delete(PriceHistory).where(col(PriceHistory.ts) < cutoff))
         session.commit()
+
+        # evaluate alert rules against the fresh snapshot
+        try:
+            from .alerts import evaluate_alerts
+            hits = evaluate_alerts(session, settings)
+            if hits:
+                log.info("alerts fired: %d", len(hits))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("alert evaluation failed: %s", exc)
 
     _LAST_SCAN = datetime.now(timezone.utc)
     log.info("scan complete: %d subnets, %d dev repos, %d signals",

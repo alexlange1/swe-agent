@@ -4,8 +4,18 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
+from ..config import get_settings
 from ..db import get_session
-from ..models import ScoreBreakdown, SubnetOut, SubnetSnapshot
+from ..models import (
+    Decentralization,
+    HistoryPoint,
+    ScoreBreakdown,
+    SubnetHistory,
+    SubnetOut,
+    SubnetSnapshot,
+    PriceHistory,
+)
+from ..providers.chain_subtensor import SubtensorChainProvider
 
 router = APIRouter(prefix="/api/subnets", tags=["subnets"])
 
@@ -28,8 +38,10 @@ def _to_out(s: SubnetSnapshot) -> SubnetOut:
         emission_share=s.emission_share, emission_change=s.emission_change,
         volume_24h_tao=s.volume_24h_tao, net_tao_flow=s.net_tao_flow,
         github=s.github, url=s.url, description=s.description,
-        validators=s.validators, miners=s.miners,
-        nakamoto_coefficient=s.nakamoto_coefficient, commits_7d=s.commits_7d,
+        validators=s.validators, miners=s.miners, max_validators=s.max_validators,
+        nakamoto_coefficient=s.nakamoto_coefficient,
+        registration_cost_tao=s.registration_cost_tao, age_days=s.age_days, tempo=s.tempo,
+        commits_7d=s.commits_7d,
         contributors_7d=s.contributors_7d, releases_30d=s.releases_30d,
         mentions_24h=s.mentions_24h, heat_score=s.heat_score,
         buy_sell_ratio=s.buy_sell_ratio, is_whale_accumulating=s.is_whale_accumulating,
@@ -68,3 +80,37 @@ def get_subnet(netuid: int, session: Session = Depends(get_session)) -> SubnetOu
     if not s:
         raise HTTPException(status_code=404, detail="subnet not scanned yet")
     return _to_out(s)
+
+
+@router.get("/{netuid}/history", response_model=SubnetHistory)
+def subnet_history(
+    netuid: int, limit: int = Query(300, le=2000),
+    session: Session = Depends(get_session),
+) -> SubnetHistory:
+    rows = session.exec(
+        select(PriceHistory).where(PriceHistory.netuid == netuid)
+        .order_by(PriceHistory.ts).limit(limit)
+    ).all()
+    return SubnetHistory(
+        netuid=netuid,
+        points=[
+            HistoryPoint(
+                ts=r.ts, price_tao=r.price_tao, emission_share=r.emission_share,
+                agap_score=r.agap_score, net_tao_flow=r.net_tao_flow,
+            )
+            for r in rows
+        ],
+    )
+
+
+@router.get("/{netuid}/decentralization", response_model=Decentralization)
+def subnet_decentralization(netuid: int) -> Decentralization:
+    """Live on-chain validator stake concentration (Nakamoto coefficient + top validators)."""
+    provider = SubtensorChainProvider(endpoint=get_settings().subtensor_endpoint)
+    try:
+        data = provider.decentralization(netuid)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"chain query failed: {exc}") from exc
+    finally:
+        provider.close()
+    return Decentralization(**data)

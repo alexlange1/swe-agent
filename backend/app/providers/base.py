@@ -28,8 +28,14 @@ class ChainData:
     volume_24h_tao: float = 0.0
     validators: int = 0
     miners: int = 0
+    max_validators: int = 0
     nakamoto_coefficient: int = 0
     net_tao_flow: float = 0.0  # SubnetProtocolFlow, TAO; positive = capital inflow
+
+    # Lifecycle / economics
+    registration_cost_tao: float = 0.0  # Burn(netuid)
+    age_days: float = 0.0               # from NetworkRegisteredAt
+    tempo: int = 0
 
     # On-chain identity
     name: str | None = None

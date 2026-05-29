@@ -24,7 +24,11 @@ export interface Subnet {
   description: string | null;
   validators: number;
   miners: number;
+  max_validators: number;
   nakamoto_coefficient: number;
+  registration_cost_tao: number;
+  age_days: number;
+  tempo: number;
   commits_7d: number;
   contributors_7d: number;
   releases_30d: number;
@@ -94,6 +98,72 @@ export interface Health {
   providers: Record<string, boolean>;
   subnets_tracked: number;
   last_scan: string | null;
+  tao_usd: number | null;
+}
+
+export interface Mover {
+  netuid: number;
+  name: string;
+  symbol: string;
+  agap_score: number;
+  agap_change: number;
+  price_tao: number;
+  price_change_24h: number;
+}
+
+export interface Overview {
+  subnets_tracked: number;
+  tao_usd: number | null;
+  total_liquidity_tao: number;
+  total_market_cap_tao: number;
+  total_volume_tao: number;
+  total_commits_7d: number;
+  subnets_with_dev: number;
+  avg_agap: number;
+  net_inflow_subnets: number;
+  top_gainers: Mover[];
+  top_losers: Mover[];
+  last_scan: string | null;
+}
+
+export interface HistoryPoint {
+  ts: string;
+  price_tao: number;
+  emission_share: number;
+  agap_score: number;
+  net_tao_flow: number;
+}
+
+export interface SubnetHistory {
+  netuid: number;
+  points: HistoryPoint[];
+}
+
+export interface TopValidator {
+  uid: number;
+  hotkey: string;
+  stake_alpha: number;
+  stake_pct: number;
+}
+
+export interface Decentralization {
+  netuid: number;
+  validators: number;
+  nakamoto_coefficient: number;
+  total_validator_stake_alpha: number;
+  top_validators: TopValidator[];
+}
+
+export interface Alert {
+  id: number;
+  metric: string;
+  op: string;
+  threshold: number;
+  netuid: number | null;
+  label: string;
+  last_triggered_netuid: number | null;
+  last_triggered_at: string | null;
+  created_at: string;
 }
 
 async function get<T>(path: string): Promise<T> {
@@ -102,14 +172,45 @@ async function get<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+  return res.json() as Promise<T>;
+}
+
 export const api = {
   health: () => get<Health>("/api/health"),
+  overview: () => get<Overview>("/api/overview"),
   subnets: (params: Record<string, string> = {}) =>
     get<Subnet[]>("/api/subnets?" + new URLSearchParams(params).toString()),
   subnet: (netuid: number) => get<Subnet>(`/api/subnets/${netuid}`),
+  history: (netuid: number) => get<SubnetHistory>(`/api/subnets/${netuid}/history`),
+  decentralization: (netuid: number) =>
+    get<Decentralization>(`/api/subnets/${netuid}/decentralization`),
   signals: (params: Record<string, string> = {}) =>
     get<Signal[]>("/api/signals?" + new URLSearchParams(params).toString()),
   whales: () => get<CapitalFlows>("/api/whales"),
+  alerts: {
+    list: () => get<Alert[]>("/api/alerts"),
+    create: (body: {
+      metric: string;
+      op: string;
+      threshold: number;
+      netuid?: number | null;
+      label: string;
+    }) => post<Alert>("/api/alerts", body),
+    remove: async (id: number) => {
+      const res = await fetch(`/api/alerts/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`delete -> ${res.status}`);
+      return res.json();
+    },
+    telegramStatus: () => get<{ telegram_configured: boolean }>("/api/alerts/status"),
+    test: () => post<{ sent: boolean }>("/api/alerts/test", {}),
+  },
   wallet: (address: string) => get<WalletPortfolio>(`/api/wallets/${address}`),
   oracle: async (question: string) => {
     const res = await fetch("/api/oracle", {

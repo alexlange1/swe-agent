@@ -51,7 +51,13 @@ class SubnetSnapshot(SQLModel, table=True):
     # Network
     validators: int = 0
     miners: int = 0
+    max_validators: int = 0
     nakamoto_coefficient: int = 0
+
+    # Lifecycle / economics
+    registration_cost_tao: float = 0.0
+    age_days: float = 0.0
+    tempo: int = 0
 
     # Development
     commits_7d: int = 0
@@ -88,7 +94,24 @@ class PriceHistory(SQLModel, table=True):
     netuid: int = Field(index=True)
     price_tao: float = 0.0
     emission_share: float = 0.0
+    agap_score: float = 0.0
+    net_tao_flow: float = 0.0
     ts: datetime = Field(default_factory=_utcnow, index=True)
+
+
+class Alert(SQLModel, table=True):
+    """A user-defined alert rule evaluated against each scan."""
+    __tablename__ = "alert"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    metric: str = "agap_score"   # agap_score|price_change_24h|net_tao_flow|commits_7d|emission_change
+    op: str = ">"                # > | <
+    threshold: float = 70.0
+    netuid: Optional[int] = None  # None = any subnet
+    label: str = ""
+    last_triggered_netuid: Optional[int] = None
+    last_triggered_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=_utcnow)
 
 
 class Signal(SQLModel, table=True):
@@ -150,7 +173,11 @@ class SubnetOut(BaseModel):
     description: Optional[str] = None
     validators: int
     miners: int
+    max_validators: int = 0
     nakamoto_coefficient: int
+    registration_cost_tao: float = 0.0
+    age_days: float = 0.0
+    tempo: int = 0
     commits_7d: int
     contributors_7d: int
     releases_30d: int
@@ -224,3 +251,87 @@ class HealthOut(BaseModel):
     providers: dict[str, bool]
     subnets_tracked: int
     last_scan: Optional[datetime]
+    tao_usd: Optional[float] = None
+
+
+class HistoryPoint(BaseModel):
+    ts: datetime
+    price_tao: float
+    emission_share: float
+    agap_score: float
+    net_tao_flow: float
+
+
+class SubnetHistory(BaseModel):
+    netuid: int
+    points: list[HistoryPoint]
+
+
+class TopValidator(BaseModel):
+    uid: int
+    hotkey: str
+    stake_alpha: float
+    stake_pct: float
+
+
+class Decentralization(BaseModel):
+    netuid: int
+    validators: int
+    nakamoto_coefficient: int
+    total_validator_stake_alpha: float
+    top_validators: list[TopValidator]
+
+
+class Mover(BaseModel):
+    netuid: int
+    name: str
+    symbol: str
+    agap_score: float
+    agap_change: float
+    price_tao: float
+    price_change_24h: float
+
+
+class Overview(BaseModel):
+    subnets_tracked: int
+    tao_usd: Optional[float]
+    total_liquidity_tao: float
+    total_market_cap_tao: float
+    total_volume_tao: float
+    total_commits_7d: int
+    subnets_with_dev: int
+    avg_agap: float
+    net_inflow_subnets: int
+    top_gainers: list[Mover]
+    top_losers: list[Mover]
+    last_scan: Optional[datetime]
+
+
+class AlertIn(BaseModel):
+    metric: str = "agap_score"
+    op: str = ">"
+    threshold: float = 70.0
+    netuid: Optional[int] = None
+    label: str = ""
+
+
+class AlertOut(BaseModel):
+    id: int
+    metric: str
+    op: str
+    threshold: float
+    netuid: Optional[int]
+    label: str
+    last_triggered_netuid: Optional[int]
+    last_triggered_at: Optional[datetime]
+    created_at: datetime
+
+
+class AlertHit(BaseModel):
+    alert_id: int
+    label: str
+    netuid: int
+    subnet_name: str
+    metric: str
+    value: float
+    message: str

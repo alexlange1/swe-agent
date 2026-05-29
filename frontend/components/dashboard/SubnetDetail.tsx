@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api, type Signal, type Subnet } from "@/lib/api";
 import { Pct, ScoreBar, timeAgo, kindIcon } from "./ui";
@@ -70,20 +71,21 @@ export function SubnetDetail({ netuid, onClose }: { netuid: number; onClose: () 
             {subnet.description && (
               <p className="mt-4 text-sm leading-relaxed text-slate-400">{subnet.description}</p>
             )}
-            {(subnet.github || subnet.url) && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {subnet.github && (
-                  <a href={subnet.github} target="_blank" rel="noreferrer" className="chip hover:border-alpha-500/50">
-                    ⌥ GitHub
-                  </a>
-                )}
-                {subnet.url && (
-                  <a href={subnet.url} target="_blank" rel="noreferrer" className="chip hover:border-alpha-500/50">
-                    ↗ Website
-                  </a>
-                )}
-              </div>
-            )}
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Link href={`/subnet/${subnet.netuid}`} className="chip border-alpha-500/40 text-alpha-300 hover:border-alpha-500/70">
+                Open full page →
+              </Link>
+              {subnet.github && (
+                <a href={subnet.github} target="_blank" rel="noreferrer" className="chip hover:border-alpha-500/50">
+                  ⌥ GitHub
+                </a>
+              )}
+              {subnet.url && (
+                <a href={subnet.url} target="_blank" rel="noreferrer" className="chip hover:border-alpha-500/50">
+                  ↗ Website
+                </a>
+              )}
+            </div>
 
             <div className="mt-5 grid grid-cols-2 gap-3">
               {[

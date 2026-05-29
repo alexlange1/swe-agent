@@ -78,7 +78,10 @@ for the core economic + identity signals; pillars that need an external feed are
 - **`backend/`** — FastAPI + SQLModel. aGap scoring engine, pluggable data providers,
   scan scheduler, AI/Oracle layer, REST API. See [`backend/README.md`](backend/README.md).
 - **`frontend/`** — Next.js 14 + Tailwind. Marketing site replica + a live intelligence
-  dashboard (leaderboard, AI feed, whale detection, wallet tracker, TAO Oracle).
+  dashboard: **network overview** (aggregates, TAO/USD, 24h aGap movers), leaderboard with
+  **watchlist**, AI feed, capital-flow detection, wallet tracker, **alerts** (Telegram),
+  TAO Oracle, and per-subnet **detail pages** with price/aGap **charts** and live
+  **decentralization** analysis (Nakamoto coefficient + top validators).
 - **`docs/`** — data-acquisition strategy.
 
 ## Quick start

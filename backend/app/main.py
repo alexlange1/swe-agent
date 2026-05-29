@@ -12,7 +12,7 @@ from . import __version__
 from .config import get_settings
 from .db import engine, init_db
 from .models import SubnetSnapshot
-from .routers import meta, oracle, signals, subnets, wallets, whales
+from .routers import alerts, meta, oracle, overview, signals, subnets, wallets, whales
 from .scheduler import start_scheduler, stop_scheduler
 from .services.scan import run_scan
 
@@ -53,11 +53,13 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(meta.router)
+    app.include_router(overview.router)
     app.include_router(subnets.router)
     app.include_router(signals.router)
     app.include_router(whales.router)
     app.include_router(wallets.router)
     app.include_router(oracle.router)
+    app.include_router(alerts.router)
 
     @app.get("/")
     def root() -> dict:
