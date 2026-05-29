@@ -1,28 +1,21 @@
-/workspace/
-
-# Local environment
-.env
-.venv/
-.python-version
-
-# Python cache and build artifacts
+# Python
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
-*.so
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.coverage
-.coverage.*
-htmlcov/
-build/
+.venv/
+venv/
+*.db
+.env
+.env.local
+
+# Node / Next
+node_modules/
+.next/
+out/
 dist/
-*.egg-info/
-
-# Runtime logs
-validator.log
-
-# OS/editor cruft
+npm-debug.log*
+yarn-error.log*
 .DS_Store
+
+# Editor
+.vscode/
+.idea/
