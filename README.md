@@ -1,266 +1,138 @@
-# tau
+<div align="center">
 
-`tau` is a small CLI for running a staged SWE workflow:
+# α  Alpha
 
-1. `generate` mines a commit and creates a task.
-2. `solve` runs a solver against that task.
-3. `compare` scores two saved solutions by changed-line similarity.
-4. `eval` compares multiple solutions with an LLM judge.
-5. `delete` removes saved task artifacts.
+### Bittensor Subnet Intelligence
 
-## Modify And Share The Main Agent
+**Find the alpha gap before everyone else.**
 
-The default agent used by this repo lives in `tau/agent`.
+Alpha scans thousands of data points across the entire Bittensor ecosystem — development
+activity, on-chain emissions, whale flows, and social velocity — and surfaces
+**undervalued subnets before the market catches on.**
 
-If you want to change the main agent behavior, edit that workspace directly. `tau solve` accepts `--agent ./agent`, so your local changes are picked up automatically:
+</div>
+
+---
+
+## What is "the alpha gap"?
+
+There is a measurable lag between a subnet team **shipping** something meaningful and the
+**market pricing it in**. Alpha instruments both sides — *development reality* vs *market
+awareness* — and computes the **aGap score**: a single 0–100 answer to *"is this subnet
+undervalued right now?"*
+
+The score blends four pillars (each framed so higher = more bullish for the gap thesis):
+
+| Pillar | Question | Weight |
+|---|---|---|
+| **Development** | How hard is the team shipping? | 30% |
+| **Market Gap** | Has price NOT yet caught up to that shipping? | 25% |
+| **Awareness** | How *hidden* is it? (low market awareness ⇒ high score) | 20% |
+| **Smart Money** | Are insiders / the network rotating value in quietly? | 25% |
+
+High dev + lagging price + low awareness + smart-money inflow = a high aGap = an alpha gap.
+
+## How we get all the info
+
+The full data-acquisition strategy is documented in
+**[`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md)** — the core "deep thinking" of the project.
+In short, **the data is real**:
+
+- **On-chain truth (free, no key)** — Alpha talks Substrate JSON-RPC directly to the
+  Bittensor chain (Finney) via `substrate-interface`. Bulk `query_map` calls read every
+  subnet's pool reserves → **price**, **market cap**, **liquidity**, **volume**,
+  **emission weight**, **validator/miner counts**, and **net capital flow**
+  (`SubnetProtocolFlow`). Subnet **identity** — name, symbol, GitHub repo, Discord,
+  website, owner — comes from `SubnetIdentitiesV3` on-chain (no hand-curated registry).
+- **Development signal** (the leading indicator) — real GitHub commits/contributors/
+  releases for each subnet's **on-chain** GitHub repo.
+- **Awareness signal** — X/Twitter + Discord velocity. Gated behind a key; until then the
+  awareness pillar is honestly marked `n/a` and excluded from the score.
+- **Smart money** — real on-chain net TAO flow into each subnet pool now; per-wallet whale
+  labelling unlocks with a TaoStats key.
+- **AI layer** — an LLM turns raw commits/metrics into plain-English breakdowns and powers
+  the **TAO Oracle** chat, grounded on the collected data.
+
+**There is no synthetic data.** With zero credentials the stack runs on live on-chain data
+for the core economic + identity signals; pillars that need an external feed are marked
+`n/a`/gated rather than fabricated, and light up as keys are added. See the
+[live-vs-gated table](docs/DATA_SOURCES.md#8-whats-live-now-vs-gated).
+
+## Architecture
+
+```
+                 ┌───────────────────────────┐
+   data sources  │  scan engine (scheduler)  │   every N minutes
+   ┌──────────┐  │  chain · dev · social ·   │
+   │ taostats │─►│  whale → normalise →      │
+   │ github   │─►│  aGap scoring → AI summary │
+   │ x/discord│─►│  → SQLite store           │
+   └──────────┘  └────────────┬──────────────┘
+                              │  FastAPI REST
+                              ▼
+                   ┌────────────────────┐
+                   │  Next.js frontend  │  landing + dashboard
+                   └────────────────────┘
+```
+
+- **`backend/`** — FastAPI + SQLModel. aGap scoring engine, pluggable data providers,
+  scan scheduler, AI/Oracle layer, REST API. See [`backend/README.md`](backend/README.md).
+- **`frontend/`** — Next.js 14 + Tailwind. Marketing site replica + a live intelligence
+  dashboard: **network overview** (aggregates, TAO/USD, 24h aGap movers), leaderboard with
+  **watchlist**, AI feed, capital-flow detection, wallet tracker, **alerts** (Telegram),
+  TAO Oracle, and per-subnet **detail pages** with price/aGap **charts** and live
+  **decentralization** analysis (Nakamoto coefficient + top validators).
+- **`docs/`** — data-acquisition strategy.
+
+## Quick start
+
+Two terminals (or use Docker below).
+
+**Backend**
 
 ```bash
-source .venv/bin/activate
-tau solve --task my-task --solution local-dev --agent ./agent
+cd backend
+virtualenv .venv && source .venv/bin/activate   # or python -m venv .venv
+pip install -r requirements.txt
+cp .env.example .env        # optional — add keys to enable real data
+uvicorn app.main:app --reload --port 8000
 ```
 
-If you want other people or other machines to use the same agent, put it in a GitHub repo and keep the agent workspace at either:
-
-- the repo root, if that root already contains `packages/coding-agent`
-- `agent/`, if the repo is a larger project and the agent lives in a nested `agent` directory
-
-Then you can share it via GitHub and run it with either a full GitHub URL or the `owner/repo` shorthand:
+**Frontend**
 
 ```bash
-source .venv/bin/activate
-tau solve --task my-task --solution shared --agent owner/repo
+cd frontend
+npm install
+API_BASE_URL=http://localhost:8000 npm run dev   # http://localhost:3000
 ```
 
-or:
+Open <http://localhost:3000>. On first boot the backend connects to the Bittensor chain
+and runs an initial **real** scan (~8s), so the dashboard shows live subnet data
+immediately. (Requires outbound access to the chain endpoint.)
+
+### Docker
 
 ```bash
-source .venv/bin/activate
-tau solve --task my-task --solution shared --agent https://github.com/owner/repo
+docker compose up --build
+# frontend → http://localhost:3000   backend → http://localhost:8000/docs
 ```
 
-This makes it easy to iterate locally in `tau/agent`, then publish the same agent for reproducible runs elsewhere.
+## Unlocking the remaining feeds
 
-## Prerequisites
+Core economic + identity data is live with no keys. These unlock the rest (drop into
+`backend/.env`):
 
-- Python 3.11+
-- `uv`
-- Docker
-- A GitHub token for task generation
-- An OpenRouter API key for Docker PI solves and evaluation
-- A Cursor API key for Cursor solves
+| Env var | Lights up |
+|---|---|
+| `GITHUB_TOKEN` | Full-coverage development signal (all ~107 on-chain repos, not ~20) |
+| `X_BEARER_TOKEN` / `DISCORD_BOT_TOKEN` | The awareness pillar (currently `n/a`) |
+| `TAOSTATS_API_KEY` | Wallet tracker + per-wallet whale labelling |
+| `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY` | LLM feed summaries + Oracle answers |
+| `SUBTENSOR_ENDPOINT` | Use a different chain endpoint (default Finney) |
 
-## Setup
+Nothing is faked: a feed without its key is reported as `n/a`/gated, never synthesised.
 
-From the `tau/` directory:
+## Disclaimer
 
-```bash
-source .venv/bin/activate
-uv pip install -e .
-```
-
-Create a `.env` file in `tau/` if you do not already have one:
-
-```bash
-GITHUB_TOKEN=your_github_token
-OPENROUTER_API_KEY=your_openrouter_api_key
-CURSOR_API_KEY=your_cursor_api_key
-```
-
-`tau` loads `.env` automatically from the project root.
-
-## Basic Usage
-
-Show top-level help:
-
-```bash
-source .venv/bin/activate
-tau --help
-```
-
-All commands write their artifacts under:
-
-```text
-workspace/tasks/
-```
-
-You can override that with `--workspace-root /path/to/root`.
-
-## Generate A Task
-
-```bash
-source .venv/bin/activate
-tau generate --task my-task
-```
-
-Useful options:
-
-- `--generator-model <model>`
-- `--seed <int>`
-- `--max-mining-attempts <int>`
-- `--agent-timeout <seconds>`
-- `--debug`
-
-## Solve A Task
-
-`solve` supports multiple backends. The `--agent` value can be:
-
-- `cursor` to run the Cursor CLI in Docker
-- `claude` to run the local Claude CLI on the host
-- a local agent workspace directory for the Docker PI solver
-- a repo root that contains `agent/` for the Docker PI solver
-- a GitHub repo URL or shorthand like `owner/repo` for the Docker PI solver
-
-Example using Cursor:
-
-```bash
-source .venv/bin/activate
-tau solve --task my-task --solution cursor-run --agent cursor
-```
-
-Example using Claude:
-
-```bash
-source .venv/bin/activate
-tau solve --task my-task --solution claude-run --agent claude
-```
-
-Example using the local bundled agent checkout in this repo:
-
-```bash
-source .venv/bin/activate
-tau solve --task my-task --solution baseline --agent ./agent
-```
-
-Example using a GitHub repo:
-
-```bash
-source .venv/bin/activate
-tau solve --task my-task --solution baseline --agent badlogic/pi-mono
-```
-
-Useful options:
-
-- `--solver-model <model>`
-- `--solver-max-requests <int>`
-- `--solver-max-total-tokens <int>`
-- `--solver-max-cost <float>`
-- `--docker-solver-memory 2g`
-- `--docker-solver-cpus 2`
-- `--docker-solver-no-cache`
-- `--agent-timeout <seconds>`
-- `--debug`
-
-## Compare Solutions
-
-Compare two saved solutions using changed-lines-only similarity:
-
-```bash
-source .venv/bin/activate
-tau compare --task my-task --solutions cursor-run baseline
-```
-
-Comma-separated values also work:
-
-```bash
-source .venv/bin/activate
-tau compare --task my-task --solutions cursor-run,baseline
-```
-
-## Evaluate Solutions
-
-Compare two or more solutions for the same task:
-
-```bash
-source .venv/bin/activate
-tau eval --task my-task --solutions baseline candidate-a candidate-b
-```
-
-Comma-separated values also work:
-
-```bash
-source .venv/bin/activate
-tau eval --task my-task --solutions baseline,candidate-a,candidate-b
-```
-
-Useful options:
-
-- `--eval-model <model>`
-- `--seed <int>`
-- `--agent-timeout <seconds>`
-- `--debug`
-
-## Delete Saved Artifacts
-
-Delete one task:
-
-```bash
-source .venv/bin/activate
-tau delete --task my-task
-```
-
-Delete all saved tasks:
-
-```bash
-source .venv/bin/activate
-tau delete task --all
-```
-
-## End-To-End Example
-
-```bash
-source .venv/bin/activate
-tau generate --task demo-task
-tau solve --task demo-task --solution run-1 --agent cursor
-tau solve --task demo-task --solution run-2 --agent ./agent
-tau compare --task demo-task --solutions run-1 run-2
-tau eval --task demo-task --solutions run-1 run-2
-```
-
-## Cursor Agent In Docker
-
-When you pass `--agent cursor`, tau builds a Docker image, runs the Cursor CLI inside it, and collects the resulting diff.
-
-### What happens
-
-1. A Docker image (`swe-eval/cursor-solver:<hash>`) is built from `python:3.11-slim` with the Cursor CLI installed via `curl https://cursor.com/install | bash`.
-2. A container starts with resource limits (memory, CPU, pids, tmpfs).
-3. The task repo is copied into the container at `/work/repo` and the prompt is written to `/work/task.txt`.
-4. The Cursor `agent` CLI runs inside the container with `CURSOR_API_KEY` injected:
-
-```bash
-agent -p --force --trust --sandbox disabled --output-format stream-json \
-    --workspace /work/repo "$PROMPT"
-```
-
-5. The diff is collected from the container and applied back to the host repo.
-6. The container is torn down.
-
-### Usage
-
-```bash
-source .venv/bin/activate
-tau solve --task my-task --solution cursor-run --agent cursor
-```
-
-`CURSOR_API_KEY` must be set in your environment or in `tau/.env`.
-
-### Docker options
-
-| Flag | Purpose |
-|------|---------|
-| `--solver-model <model>` | Override the model used by Cursor |
-| `--agent-timeout <seconds>` | Time limit for the solve |
-| `--docker-solver-memory 2g` | Container memory limit |
-| `--docker-solver-cpus 2` | Container CPU limit |
-| `--docker-solver-no-cache` | Force rebuild the Docker image |
-| `--debug` | Enable debug logging |
-
-## Notes
-
-- `generate` needs `GITHUB_TOKEN` or `GH_TOKEN`.
-- `tau solve --agent cursor` needs `CURSOR_API_KEY` and Docker.
-- `tau solve --agent claude` needs the `claude` CLI installed on the host.
-- Docker PI solves and `eval` need `OPENROUTER_API_KEY`.
-- `compare` reads saved solution artifacts and does not call a model.
-- Docker-backed solves use Docker, so Docker must be installed and running.
-- Generated task, solution, and evaluation paths are printed by the CLI after each command finishes.
+Alpha is an analytics tool, **not financial advice**. Crypto assets are volatile. The demo
+provider generates synthetic numbers for exploration; verify with real feeds before acting.
