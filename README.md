@@ -36,19 +36,27 @@ High dev + lagging price + low awareness + smart-money inflow = a high aGap = an
 
 The full data-acquisition strategy is documented in
 **[`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md)** — the core "deep thinking" of the project.
-In short:
+In short, **the data is real**:
 
-- **On-chain truth** — TaoStats API / Subtensor RPC for price, emissions, validators,
-  Nakamoto coefficient, and wallet/transfer flows (dTAO pools give per-subnet price).
-- **Development signal** (the leading indicator) — GitHub commits/PRs/releases and
-  HuggingFace model pushes, mapped to subnets via a curated registry.
-- **Awareness signal** — X/Twitter + Discord velocity to measure how aware the market is.
-- **Smart money** — classify on-chain transfers by size to detect whale accumulation.
+- **On-chain truth (free, no key)** — Alpha talks Substrate JSON-RPC directly to the
+  Bittensor chain (Finney) via `substrate-interface`. Bulk `query_map` calls read every
+  subnet's pool reserves → **price**, **market cap**, **liquidity**, **volume**,
+  **emission weight**, **validator/miner counts**, and **net capital flow**
+  (`SubnetProtocolFlow`). Subnet **identity** — name, symbol, GitHub repo, Discord,
+  website, owner — comes from `SubnetIdentitiesV3` on-chain (no hand-curated registry).
+- **Development signal** (the leading indicator) — real GitHub commits/contributors/
+  releases for each subnet's **on-chain** GitHub repo.
+- **Awareness signal** — X/Twitter + Discord velocity. Gated behind a key; until then the
+  awareness pillar is honestly marked `n/a` and excluded from the score.
+- **Smart money** — real on-chain net TAO flow into each subnet pool now; per-wallet whale
+  labelling unlocks with a TaoStats key.
 - **AI layer** — an LLM turns raw commits/metrics into plain-English breakdowns and powers
   the **TAO Oracle** chat, grounded on the collected data.
 
-**Every provider has a deterministic demo fallback, so the entire stack runs end-to-end
-with zero credentials** and progressively lights up real feeds as keys are added.
+**There is no synthetic data.** With zero credentials the stack runs on live on-chain data
+for the core economic + identity signals; pillars that need an external feed are marked
+`n/a`/gated rather than fabricated, and light up as keys are added. See the
+[live-vs-gated table](docs/DATA_SOURCES.md#8-whats-live-now-vs-gated).
 
 ## Architecture
 
@@ -95,8 +103,9 @@ npm install
 API_BASE_URL=http://localhost:8000 npm run dev   # http://localhost:3000
 ```
 
-Open <http://localhost:3000>. The backend auto-runs an initial demo scan on first boot,
-so the dashboard has data immediately.
+Open <http://localhost:3000>. On first boot the backend connects to the Bittensor chain
+and runs an initial **real** scan (~8s), so the dashboard shows live subnet data
+immediately. (Requires outbound access to the chain endpoint.)
 
 ### Docker
 
@@ -105,18 +114,20 @@ docker compose up --build
 # frontend → http://localhost:3000   backend → http://localhost:8000/docs
 ```
 
-## Enabling real data
+## Unlocking the remaining feeds
 
-Drop any of these into `backend/.env` (all optional):
+Core economic + identity data is live with no keys. These unlock the rest (drop into
+`backend/.env`):
 
 | Env var | Lights up |
 |---|---|
-| `TAOSTATS_API_KEY` | Real price / emissions / validators / wallet flows |
-| `GITHUB_TOKEN` | Real development signal for curated subnets |
-| `X_BEARER_TOKEN` / `DISCORD_BOT_TOKEN` | Real social / awareness signal |
-| `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY` | AI feed summaries + live TAO Oracle |
+| `GITHUB_TOKEN` | Full-coverage development signal (all ~107 on-chain repos, not ~20) |
+| `X_BEARER_TOKEN` / `DISCORD_BOT_TOKEN` | The awareness pillar (currently `n/a`) |
+| `TAOSTATS_API_KEY` | Wallet tracker + per-wallet whale labelling |
+| `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY` | LLM feed summaries + Oracle answers |
+| `SUBTENSOR_ENDPOINT` | Use a different chain endpoint (default Finney) |
 
-Real data is merged *over* demo data per subnet, so partial coverage degrades gracefully.
+Nothing is faked: a feed without its key is reported as `n/a`/gated, never synthesised.
 
 ## Disclaimer
 

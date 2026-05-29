@@ -20,8 +20,13 @@ export function WalletTracker() {
     try {
       const res = await api.wallet(addr.trim());
       setData(res);
-    } catch {
-      setError("Could not resolve that address.");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      setError(
+        msg.includes("503")
+          ? "Wallet tracking requires an on-chain stake indexer. Set TAOSTATS_API_KEY on the backend to enable it — no data is fabricated."
+          : "Could not resolve that address."
+      );
     } finally {
       setLoading(false);
     }

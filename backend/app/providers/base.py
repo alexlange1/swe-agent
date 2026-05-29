@@ -1,9 +1,8 @@
 """Provider interfaces and the normalised data shapes they emit.
 
 A provider owns *one concern* (chain, dev, social, whale, wallet). The scan
-service composes whichever concrete providers are available and merges their
-output into a single snapshot. Every provider has a demo implementation so the
-pipeline never has a hole.
+service composes whichever concrete providers are available. There is no synthetic
+fallback: a concern with no provider yields no data (honest n/a) rather than fake data.
 """
 from __future__ import annotations
 
@@ -14,7 +13,11 @@ from typing import Protocol, runtime_checkable
 
 @dataclass
 class ChainData:
-    """On-chain / market truth for one subnet."""
+    """On-chain / market truth for one subnet.
+
+    Identity fields (name/symbol/github/...) come straight from the chain
+    (``SubnetIdentitiesV3`` + ``TokenSymbol``) so they are authoritative.
+    """
     netuid: int
     price_tao: float = 0.0
     price_change_24h: float = 0.0
@@ -26,6 +29,16 @@ class ChainData:
     validators: int = 0
     miners: int = 0
     nakamoto_coefficient: int = 0
+    net_tao_flow: float = 0.0  # SubnetProtocolFlow, TAO; positive = capital inflow
+
+    # On-chain identity
+    name: str | None = None
+    symbol: str | None = None
+    github: str | None = None
+    discord: str | None = None
+    url: str | None = None
+    owner: str | None = None
+    description: str | None = None
 
 
 @dataclass

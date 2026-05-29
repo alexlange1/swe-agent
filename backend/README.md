@@ -14,9 +14,10 @@ cp .env.example .env   # optional — fill in keys to light up real data
 uvicorn app.main:app --reload --port 8000
 ```
 
-With no credentials the service boots, runs an initial scan on the deterministic demo
-provider, and serves data immediately. Add keys (`TAOSTATS_API_KEY`, `GITHUB_TOKEN`,
-`OPENROUTER_API_KEY`, ...) to progressively replace demo data with real feeds.
+With no credentials the service boots, connects to the Bittensor chain, and runs an
+initial **real** scan immediately (needs outbound access to the chain endpoint). The core
+economic + identity signals are live key-free; add keys (`GITHUB_TOKEN`, `TAOSTATS_API_KEY`,
+`OPENROUTER_API_KEY`, ...) to unlock the remaining pillars. **No data is ever synthesised.**
 
 ## API
 
@@ -38,11 +39,13 @@ Interactive docs at `/docs`.
 ```
 app/
   config.py        settings / credentials
-  models.py        SQLModel tables + API schemas
-  scoring.py       the aGap composite engine
+  models.py        SQLModel tables (snapshots + price history) + API schemas
+  scoring.py       the aGap composite engine (pillars + availability)
   ai.py            LLM feed summaries + Oracle (with deterministic fallback)
-  registry/        netuid -> github/hf/social mapping
-  providers/       chain/dev/social/whale adapters (+ demo fallback)
-  services/scan.py scan orchestration
+  providers/
+    chain_subtensor.py  REAL on-chain data via Substrate JSON-RPC (no key)
+    github.py           REAL dev signal for on-chain repos
+    taostats.py         optional wallet/transfer data (key)
+  services/scan.py scan orchestration + real 24h deltas from price history
   routers/         REST endpoints
 ```

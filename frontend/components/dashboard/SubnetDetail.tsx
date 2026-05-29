@@ -53,21 +53,48 @@ export function SubnetDetail({ netuid, onClose }: { netuid: number; onClose: () 
               <div className="mt-4 space-y-3">
                 <ScoreBar label="Development" value={subnet.scores.development} />
                 <ScoreBar label="Market Gap" value={subnet.scores.market_gap} />
-                <ScoreBar label="Awareness (hidden)" value={subnet.scores.awareness} />
+                <ScoreBar
+                  label="Awareness (hidden)"
+                  value={subnet.scores.awareness}
+                  hint="Requires a social data source (X_BEARER_TOKEN / Discord)"
+                />
                 <ScoreBar label="Smart Money" value={subnet.scores.smart_money} />
               </div>
+              {!subnet.awareness_available && (
+                <p className="mt-3 text-[11px] text-slate-500">
+                  Awareness pillar is excluded from aGap until a social data source is connected.
+                </p>
+              )}
             </div>
+
+            {subnet.description && (
+              <p className="mt-4 text-sm leading-relaxed text-slate-400">{subnet.description}</p>
+            )}
+            {(subnet.github || subnet.url) && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {subnet.github && (
+                  <a href={subnet.github} target="_blank" rel="noreferrer" className="chip hover:border-alpha-500/50">
+                    ⌥ GitHub
+                  </a>
+                )}
+                {subnet.url && (
+                  <a href={subnet.url} target="_blank" rel="noreferrer" className="chip hover:border-alpha-500/50">
+                    ↗ Website
+                  </a>
+                )}
+              </div>
+            )}
 
             <div className="mt-5 grid grid-cols-2 gap-3">
               {[
                 ["Commits 7d", subnet.commits_7d],
                 ["Contributors", subnet.contributors_7d],
-                ["Emission Δ", `${subnet.emission_change >= 0 ? "+" : ""}${subnet.emission_change.toFixed(0)}%`],
-                ["Buy/Sell", `${subnet.buy_sell_ratio.toFixed(1)}x`],
+                ["Releases 30d", subnet.releases_30d],
+                ["Net flow", `${subnet.net_tao_flow >= 0 ? "+" : ""}${subnet.net_tao_flow.toFixed(2)} τ`],
                 ["Validators", subnet.validators],
-                ["Nakamoto", subnet.nakamoto_coefficient],
-                ["Mentions 24h", subnet.mentions_24h],
-                ["Heat", subnet.heat_score.toFixed(0)],
+                ["Miners", subnet.miners],
+                ["Liquidity", `${Math.round(subnet.market_cap_tao).toLocaleString()} τ`],
+                ["Volume", `${Math.round(subnet.volume_24h_tao).toLocaleString()} τ`],
               ].map(([label, val]) => (
                 <div key={label as string} className="rounded-xl border border-white/5 bg-ink-850 p-3">
                   <div className="text-[11px] uppercase tracking-wide text-slate-500">{label}</div>
@@ -75,13 +102,6 @@ export function SubnetDetail({ netuid, onClose }: { netuid: number; onClose: () 
                 </div>
               ))}
             </div>
-
-            {subnet.nakamoto_coefficient <= 1 && (
-              <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-300">
-                ⚠️ Nakamoto coefficient of {subnet.nakamoto_coefficient} — a single
-                validator may control consensus. Centralisation risk.
-              </div>
-            )}
 
             <h3 className="mt-6 text-sm font-semibold uppercase tracking-wide text-slate-500">
               Recent signals

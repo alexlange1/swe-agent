@@ -33,8 +33,7 @@ function DashboardInner() {
     api.health().then(setHealth).catch(() => {});
   }, []);
 
-  const usingReal =
-    health && Object.entries(health.providers).some(([k, v]) => k.endsWith("_real") && v);
+  const chainLive = health?.providers?.chain;
 
   return (
     <div className="container-x py-10">
@@ -53,7 +52,7 @@ function DashboardInner() {
             {health ? `${health.subnets_tracked} subnets tracked` : "connecting…"}
           </span>
           <span className="rounded-full border border-white/10 px-2 py-0.5">
-            {usingReal ? "live feeds" : "demo data"}
+            {chainLive ? "live on-chain" : "connecting…"}
           </span>
         </div>
       </div>

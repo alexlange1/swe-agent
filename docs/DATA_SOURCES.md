@@ -37,27 +37,36 @@ liquidity pool against TAO, so price/emission/market-cap are all *on-chain and p
 
 ### 2.1 Sources, in priority order
 
-1. **TaoStats API** (`https://api.taostats.io`) — the fastest path. Indexed subnet
-   metadata, prices, emissions, validators, historical series, wallet balances and
-   transfers. Requires an API key (`TAOSTATS_API_KEY`). This is our default real
-   provider because it is already indexed and rate-friendly.
-2. **Direct Subtensor RPC** via the `bittensor` Python SDK — ground truth, no
-   intermediary. We read `metagraph(netuid)` for stake/weights/validators, and the
-   subnet pool reserves (`tao_in`, `alpha_in`) to derive price. Heavier to run (needs
-   websocket access to a chain endpoint, e.g. `wss://entrypoint-finney.opentensor.ai`).
-   Used as a verification/fallback layer.
-3. **Demo provider** — a deterministic synthetic generator (seeded per netuid) so the
-   whole stack runs locally with zero credentials. Numbers are *plausible*, not real.
+1. **Direct Subtensor RPC (default, free, no key)** — ground truth, no intermediary.
+   The chain answers Substrate JSON-RPC over its public endpoint
+   (`wss://entrypoint-finney.opentensor.ai:443`). We use `substrate-interface` and a
+   handful of bulk `query_map` calls (one round-trip per storage item → all subnets in
+   ~1s) to read everything below. **This is what the product actually runs on.**
+2. **TaoStats API** (`https://api.taostats.io`) — optional, key-gated
+   (`TAOSTATS_API_KEY`). Used for the things the chain doesn't index cheaply: per-wallet
+   stake portfolios (wallet tracker) and per-wallet transfer labelling (whale wallets).
+3. **There is no synthetic fallback.** If the chain is unreachable the scan fails loudly
+   and the previous snapshot is left untouched — we never fabricate numbers.
 
-### 2.2 What on-chain gives us
+### 2.2 What on-chain gives us (real, key-free)
 
-- **Price** of each alpha token in TAO (from pool reserves: `price = tao_in / alpha_in`).
-- **Emission share** per subnet (the network's revealed preference — validators rotating
-  weight onto a subnet is a *leading* fundamental signal).
-- **Market cap & liquidity** per subnet.
-- **Metagraph**: validator/miner counts, stake distribution, **Nakamoto coefficient**
-  (centralisation red flag — a coefficient of 1 means one validator controls consensus).
-- **Wallet flows**: transfers and stake deltas → the basis for whale detection.
+Read directly from `SubtensorModule` storage:
+
+- **Price** of each alpha token in TAO: `SubnetTAO / SubnetAlphaIn` (pool reserves).
+- **Market cap & liquidity**: `price × (SubnetAlphaIn + SubnetAlphaOut)` and `SubnetTAO`.
+- **Volume**: `SubnetVolume`.
+- **Emission weight**: price-share across subnets (network's revealed preference).
+- **Validator / miner counts**: `ValidatorPermit` (count of `true`) and `SubnetworkN`.
+- **Net capital flow**: `SubnetProtocolFlow` — real net TAO flowing into each pool, our
+  on-chain smart-money signal.
+- **On-chain identity**: `SubnetIdentitiesV3` + `TokenSymbol` give the authoritative
+  **name, symbol, GitHub repo, Discord, website, owner, and description** for each
+  subnet. This *replaces* a hand-curated registry — the chain is the source of truth and
+  is also where we get each team's GitHub repo for the development scan.
+
+> Nakamoto coefficient (stake-concentration) needs the full per-validator stake
+> distribution; until that heavier query is wired it is reported as `n/a` rather than
+> guessed.
 
 ---
 
@@ -68,10 +77,15 @@ This is the highest-alpha feed because it moves *before* price. The hard part is
 curated registry (`backend/app/registry/subnets.py`) seeded from the public subnet
 directory and refined over time.
 
+The subnet → repo mapping is **read straight from the chain** (`SubnetIdentitiesV3.github_repo`);
+~107 of 128 subnets publish a repo on-chain today.
+
 ### 3.1 GitHub
 
-- **API**: REST `https://api.github.com` (+ optional GraphQL for efficiency). Auth with
-  `GITHUB_TOKEN` to lift the rate limit from 60/h to 5000/h.
+- **API**: REST `https://api.github.com`. Auth with `GITHUB_TOKEN` to lift the rate limit
+  from 60/h to 5000/h. **Without a token we can only cover a rotating ~20 repos per cycle**
+  (the anonymous limit can't cover 100+ repos), and uncovered subnets simply report zero
+  development that cycle — never a fabricated number. A token unlocks full coverage.
 - **What we pull per repo**: commits (last 7/30d), distinct contributors, opened/merged
   PRs, tags/releases, additions/deletions. We also fetch the **commit messages and
   release notes** as raw text for the AI layer to summarise.
@@ -179,16 +193,30 @@ still renders.
 
 ---
 
-## 8. Credentials summary
+## 8. What's live now vs gated
 
-| Env var | Unlocks | Required? |
+| Pillar / feature | Status with **zero keys** | Unlock |
 |---|---|---|
-| `TAOSTATS_API_KEY` | Real on-chain price/emission/validators/transfers | Recommended |
-| `GITHUB_TOKEN` | High-rate GitHub dev signal | Recommended |
-| `X_BEARER_TOKEN` | X/Twitter awareness signal | Optional |
-| `DISCORD_BOT_TOKEN` | Discord buzz | Optional |
-| `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY` | AI feed summaries + Oracle | Optional |
-| `SUBTENSOR_ENDPOINT` | Direct-chain verification via `bittensor` SDK | Optional |
+| Prices, market cap, liquidity, volume | ✅ **Live** (chain) | — |
+| Emission weight, validator/miner counts | ✅ **Live** (chain) | — |
+| Net capital flow (smart-money) | ✅ **Live** (chain) | — |
+| Subnet identity (name/symbol/GitHub/site) | ✅ **Live** (chain) | — |
+| Development signal (commits/releases) | ⚠️ ~20 repos/cycle | `GITHUB_TOKEN` → all repos |
+| 24h price/emission deltas | ⏳ Accrues after ~24h of scans | — |
+| Awareness pillar (social) | 🔒 Excluded (marked `n/a`) | `X_BEARER_TOKEN` / `DISCORD_BOT_TOKEN` |
+| Wallet tracker / per-wallet whales | 🔒 Returns 503 | `TAOSTATS_API_KEY` |
+| AI feed summaries + Oracle answers | ⚠️ Deterministic templates | `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` |
 
-**With zero credentials the stack runs fully on the deterministic demo provider** so the
-product is explorable end-to-end, then progressively lights up real feeds as keys are added.
+### Credentials
+
+| Env var | Unlocks |
+|---|---|
+| `SUBTENSOR_ENDPOINT` | Override the chain endpoint (default Finney) |
+| `GITHUB_TOKEN` | Full-coverage, high-rate GitHub dev signal |
+| `X_BEARER_TOKEN` / `DISCORD_BOT_TOKEN` | The awareness pillar |
+| `TAOSTATS_API_KEY` | Wallet tracker + per-wallet whale labelling |
+| `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY` | LLM feed summaries + Oracle |
+
+**With zero credentials the stack runs on real, live on-chain data** for the core economic
+and identity signals; the remaining pillars are honestly marked `n/a`/gated rather than
+filled with synthetic values, and light up as keys are added.

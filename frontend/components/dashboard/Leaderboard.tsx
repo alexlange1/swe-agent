@@ -2,14 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { api, type Subnet } from "@/lib/api";
-import { AgapBadge, Pct, ScoreBar } from "./ui";
+import { AgapBadge, Flow, Pct } from "./ui";
 
 const SORTS = [
   ["agap", "aGap"],
   ["dev", "Dev"],
-  ["emission_change", "Emission Δ"],
+  ["flow", "Net flow"],
   ["price_change", "24h %"],
-  ["heat", "Heat"],
+  ["volume", "Volume"],
   ["market_cap", "Mkt Cap"],
 ];
 
@@ -71,7 +71,7 @@ export function Leaderboard({ onSelect }: { onSelect: (n: number) => void }) {
               : "border border-white/10 bg-white/5 text-slate-300 hover:bg-white/10")
           }
         >
-          🐋 Whales only
+          🐋 Inflow only
         </button>
       </div>
 
@@ -83,7 +83,7 @@ export function Leaderboard({ onSelect }: { onSelect: (n: number) => void }) {
           <div className="col-span-2 text-right">Price (TAO)</div>
           <div className="col-span-1 text-right">24h</div>
           <div className="col-span-1 text-right">Dev 7d</div>
-          <div className="col-span-2 text-right">Emission Δ</div>
+          <div className="col-span-2 text-right">Net flow</div>
         </div>
 
         {loading && (
@@ -112,12 +112,9 @@ export function Leaderboard({ onSelect }: { onSelect: (n: number) => void }) {
                   <div className="truncate text-sm font-semibold text-white">
                     SN{s.netuid} · {s.name}
                     {s.is_whale_accumulating && <span className="ml-1.5">🐋</span>}
-                    {s.nakamoto_coefficient <= 1 && (
-                      <span className="ml-1.5" title="Centralisation risk">⚠️</span>
-                    )}
                   </div>
                   <div className="text-xs text-slate-500">
-                    heat {s.heat_score.toFixed(0)} · {s.mentions_24h} mentions
+                    {s.validators}v / {s.miners}m · {s.commits_7d} commits/7d
                   </div>
                 </div>
               </div>
@@ -134,7 +131,7 @@ export function Leaderboard({ onSelect }: { onSelect: (n: number) => void }) {
                 {s.commits_7d}
               </div>
               <div className="hidden text-right text-sm md:col-span-2 md:block">
-                <Pct value={s.emission_change} />
+                <Flow value={s.net_tao_flow} />
               </div>
             </button>
           ))}

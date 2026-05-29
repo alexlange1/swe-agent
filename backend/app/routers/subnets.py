@@ -15,7 +15,8 @@ _SORT_FIELDS = {
     "emission": SubnetSnapshot.emission_share,
     "emission_change": SubnetSnapshot.emission_change,
     "dev": SubnetSnapshot.score_development,
-    "heat": SubnetSnapshot.heat_score,
+    "flow": SubnetSnapshot.net_tao_flow,
+    "volume": SubnetSnapshot.volume_24h_tao,
     "market_cap": SubnetSnapshot.market_cap_tao,
 }
 
@@ -25,7 +26,9 @@ def _to_out(s: SubnetSnapshot) -> SubnetOut:
         netuid=s.netuid, name=s.name, symbol=s.symbol, price_tao=s.price_tao,
         price_change_24h=s.price_change_24h, market_cap_tao=s.market_cap_tao,
         emission_share=s.emission_share, emission_change=s.emission_change,
-        volume_24h_tao=s.volume_24h_tao, validators=s.validators, miners=s.miners,
+        volume_24h_tao=s.volume_24h_tao, net_tao_flow=s.net_tao_flow,
+        github=s.github, url=s.url, description=s.description,
+        validators=s.validators, miners=s.miners,
         nakamoto_coefficient=s.nakamoto_coefficient, commits_7d=s.commits_7d,
         contributors_7d=s.contributors_7d, releases_30d=s.releases_30d,
         mentions_24h=s.mentions_24h, heat_score=s.heat_score,
@@ -33,8 +36,10 @@ def _to_out(s: SubnetSnapshot) -> SubnetOut:
         agap_score=s.agap_score,
         scores=ScoreBreakdown(
             development=s.score_development, market_gap=s.score_market_gap,
-            awareness=s.score_awareness, smart_money=s.score_smart_money,
+            awareness=(s.score_awareness if s.awareness_available else None),
+            smart_money=s.score_smart_money,
         ),
+        awareness_available=s.awareness_available,
         collected_at=s.collected_at,
     )
 

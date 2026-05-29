@@ -6,3 +6,4 @@ sqlmodel==0.0.22
 httpx==0.28.1
 apscheduler==3.11.0
 python-dotenv==1.0.1
+substrate-interface==1.8.1

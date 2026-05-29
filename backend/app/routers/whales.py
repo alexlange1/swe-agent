@@ -1,29 +1,35 @@
-"""Whale detection endpoints."""
+"""Capital-flow / accumulation endpoint.
+
+Per-wallet whale labelling needs an on-chain transfer indexer (TaoStats). Until that
+is configured we surface the REAL on-chain signal we do have: net TAO flow into each
+subnet pool (``SubnetProtocolFlow``). Subnets with the strongest positive inflow are
+where capital is actually accumulating.
+"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 from sqlmodel import Session, select
 
 from ..db import get_session
-from ..models import WhaleEvent, WhaleOut
+from ..models import SubnetSnapshot
+from .subnets import _to_out
 
 router = APIRouter(prefix="/api/whales", tags=["whales"])
 
 
-@router.get("", response_model=list[WhaleOut])
-def list_whale_events(
-    limit: int = Query(50, le=200),
+@router.get("")
+def capital_flows(
+    limit: int = Query(40, le=128),
     session: Session = Depends(get_session),
-) -> list[WhaleOut]:
+):
     rows = session.exec(
-        select(WhaleEvent).order_by(WhaleEvent.amount_tao.desc()).limit(limit)
+        select(SubnetSnapshot)
+        .where(SubnetSnapshot.net_tao_flow > 0)
+        .order_by(SubnetSnapshot.net_tao_flow.desc())
+        .limit(limit)
     ).all()
-    return [
-        WhaleOut(
-            netuid=r.netuid, subnet_name=r.subnet_name, wallet=r.wallet,
-            wallet_label=r.wallet_label, direction=r.direction,
-            amount_tao=r.amount_tao, buy_sell_ratio=r.buy_sell_ratio,
-            created_at=r.created_at,
-        )
-        for r in rows
-    ]
+    return {
+        "signal": "net_tao_flow",
+        "note": "Real on-chain net capital flow into each subnet pool. Per-wallet labelling requires a TaoStats key.",
+        "subnets": [_to_out(s) for s in rows],
+    }

@@ -1,6 +1,27 @@
 // Small shared UI helpers for the dashboard.
 
-export function ScoreBar({ value, label }: { value: number; label: string }) {
+export function ScoreBar({
+  value,
+  label,
+  hint,
+}: {
+  value: number | null;
+  label: string;
+  hint?: string;
+}) {
+  if (value === null || value === undefined) {
+    return (
+      <div>
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-slate-400">{label}</span>
+          <span className="font-mono text-slate-600" title={hint}>n/a</span>
+        </div>
+        <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-white/5">
+          <div className="h-full w-full bg-[repeating-linear-gradient(45deg,rgba(255,255,255,.06),rgba(255,255,255,.06)_4px,transparent_4px,transparent_8px)]" />
+        </div>
+      </div>
+    );
+  }
   const hue = value >= 70 ? "bg-alpha-500" : value >= 45 ? "bg-amber-400" : "bg-slate-500";
   return (
     <div>
@@ -12,6 +33,16 @@ export function ScoreBar({ value, label }: { value: number; label: string }) {
         <div className={`h-full rounded-full ${hue}`} style={{ width: `${Math.min(100, value)}%` }} />
       </div>
     </div>
+  );
+}
+
+export function Flow({ value }: { value: number }) {
+  const pos = value >= 0;
+  return (
+    <span className={pos ? "text-alpha-400" : "text-rose-400"}>
+      {pos ? "+" : ""}
+      {value.toFixed(2)} τ
+    </span>
   );
 }
 

@@ -1,7 +1,8 @@
 """Runtime configuration for the Alpha backend.
 
-All credentials are optional. With none set, the stack runs entirely on the
-deterministic demo provider so the product is explorable end-to-end.
+All credentials are optional. With none set, the stack still runs on REAL live
+on-chain data (Subtensor RPC) for the core economic + identity signals; pillars that
+need an external feed are honestly marked n/a until their key is provided.
 """
 from __future__ import annotations
 

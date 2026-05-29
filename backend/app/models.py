@@ -40,6 +40,14 @@ class SubnetSnapshot(SQLModel, table=True):
     emission_change: float = 0.0
     volume_24h_tao: float = 0.0
 
+    net_tao_flow: float = 0.0
+
+    # On-chain identity
+    github: Optional[str] = None
+    url: Optional[str] = None
+    owner: Optional[str] = None
+    description: Optional[str] = None
+
     # Network
     validators: int = 0
     miners: int = 0
@@ -67,8 +75,20 @@ class SubnetSnapshot(SQLModel, table=True):
     score_market_gap: float = 0.0
     score_awareness: float = 0.0
     score_smart_money: float = 0.0
+    awareness_available: bool = False
 
     collected_at: datetime = Field(default_factory=_utcnow, index=True)
+
+
+class PriceHistory(SQLModel, table=True):
+    """Rolling per-scan snapshot used to compute REAL 24h price/emission deltas."""
+    __tablename__ = "price_history"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    netuid: int = Field(index=True)
+    price_tao: float = 0.0
+    emission_share: float = 0.0
+    ts: datetime = Field(default_factory=_utcnow, index=True)
 
 
 class Signal(SQLModel, table=True):
@@ -110,7 +130,7 @@ class WhaleEvent(SQLModel, table=True):
 class ScoreBreakdown(BaseModel):
     development: float
     market_gap: float
-    awareness: float
+    awareness: Optional[float] = None  # null when no social data source
     smart_money: float
 
 
@@ -124,6 +144,10 @@ class SubnetOut(BaseModel):
     emission_share: float
     emission_change: float
     volume_24h_tao: float
+    net_tao_flow: float
+    github: Optional[str] = None
+    url: Optional[str] = None
+    description: Optional[str] = None
     validators: int
     miners: int
     nakamoto_coefficient: int
@@ -136,6 +160,7 @@ class SubnetOut(BaseModel):
     is_whale_accumulating: bool
     agap_score: float
     scores: ScoreBreakdown
+    awareness_available: bool
     collected_at: datetime
 
 

@@ -4,7 +4,7 @@
 export interface ScoreBreakdown {
   development: number;
   market_gap: number;
-  awareness: number;
+  awareness: number | null; // null when no social data source
   smart_money: number;
 }
 
@@ -18,6 +18,10 @@ export interface Subnet {
   emission_share: number;
   emission_change: number;
   volume_24h_tao: number;
+  net_tao_flow: number;
+  github: string | null;
+  url: string | null;
+  description: string | null;
   validators: number;
   miners: number;
   nakamoto_coefficient: number;
@@ -30,7 +34,14 @@ export interface Subnet {
   is_whale_accumulating: boolean;
   agap_score: number;
   scores: ScoreBreakdown;
+  awareness_available: boolean;
   collected_at: string;
+}
+
+export interface CapitalFlows {
+  signal: string;
+  note: string;
+  subnets: Subnet[];
 }
 
 export interface Signal {
@@ -98,7 +109,7 @@ export const api = {
   subnet: (netuid: number) => get<Subnet>(`/api/subnets/${netuid}`),
   signals: (params: Record<string, string> = {}) =>
     get<Signal[]>("/api/signals?" + new URLSearchParams(params).toString()),
-  whales: () => get<Whale[]>("/api/whales"),
+  whales: () => get<CapitalFlows>("/api/whales"),
   wallet: (address: string) => get<WalletPortfolio>(`/api/wallets/${address}`),
   oracle: async (question: string) => {
     const res = await fetch("/api/oracle", {

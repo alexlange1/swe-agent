@@ -1,23 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, type Whale } from "@/lib/api";
-import { timeAgo } from "./ui";
-
-const LABEL_TONE: Record<string, string> = {
-  validator: "text-sky-300 bg-sky-500/10",
-  founder: "text-purple-300 bg-purple-500/10",
-  fund: "text-amber-300 bg-amber-500/10",
-  exchange: "text-rose-300 bg-rose-500/10",
-  unknown: "text-slate-400 bg-white/5",
-};
+import { api, type CapitalFlows } from "@/lib/api";
+import { Flow, Pct } from "./ui";
 
 export function Whales() {
-  const [rows, setRows] = useState<Whale[]>([]);
+  const [data, setData] = useState<CapitalFlows | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.whales().then(setRows).catch(() => setRows([])).finally(() => setLoading(false));
+    api.whales().then(setData).catch(() => setData(null)).finally(() => setLoading(false));
   }, []);
 
   return (
@@ -26,10 +18,10 @@ export function Whales() {
         <div className="flex items-center gap-3">
           <span className="text-3xl">🐋</span>
           <div>
-            <h2 className="font-bold text-white">Whale Detection</h2>
+            <h2 className="font-bold text-white">Capital Flow Detection</h2>
             <p className="text-sm text-slate-400">
-              Large-wallet accumulation detected from on-chain buy/sell flow. A high
-              buy/sell ratio means big wallets are buying while retail is flat.
+              {data?.note ||
+                "Real on-chain net capital flow into each subnet pool. Positive flow means TAO is accumulating in the subnet."}
             </p>
           </div>
         </div>
@@ -45,35 +37,33 @@ export function Whales() {
 
       <div className="card divide-y divide-white/5">
         {!loading &&
-          rows.map((w, i) => (
-            <div key={i} className="flex items-center gap-3 px-4 py-3">
-              <span className="text-lg">🐋</span>
+          data?.subnets.map((s) => (
+            <div key={s.netuid} className="flex items-center gap-3 px-4 py-3">
+              <span className="grid h-8 w-8 place-items-center rounded-lg bg-alpha-500/10 text-sm font-bold text-alpha-400">
+                {s.symbol}
+              </span>
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-semibold text-white">
-                  SN{w.netuid} · {w.subnet_name}
+                  SN{s.netuid} · {s.name}
                 </div>
-                <div className="truncate font-mono text-xs text-slate-500">{w.wallet}</div>
+                <div className="text-xs text-slate-500">
+                  liquidity context · price {s.price_tao.toFixed(4)} τ{" "}
+                  <Pct value={s.price_change_24h} />
+                </div>
               </div>
-              <span
-                className={`hidden rounded-full px-2 py-0.5 text-[11px] font-medium capitalize sm:inline ${
-                  LABEL_TONE[w.wallet_label] || LABEL_TONE.unknown
-                }`}
-              >
-                {w.wallet_label}
-              </span>
               <div className="text-right">
-                <div className="font-mono text-sm font-bold text-alpha-400">
-                  {w.amount_tao.toFixed(0)} τ
+                <div className="font-mono text-sm font-bold">
+                  <Flow value={s.net_tao_flow} />
                 </div>
-                <div className="text-[11px] text-slate-500">{w.buy_sell_ratio.toFixed(1)}x ratio</div>
+                <div className="text-[11px] text-slate-500">net pool flow</div>
               </div>
             </div>
           ))}
       </div>
 
-      {!loading && rows.length === 0 && (
+      {!loading && (!data || data.subnets.length === 0) && (
         <div className="card p-10 text-center text-sm text-slate-500">
-          No whale accumulation detected in the latest scan.
+          No positive net inflow detected in the latest scan.
         </div>
       )}
     </div>

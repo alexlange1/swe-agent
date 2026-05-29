@@ -1,121 +1,176 @@
-"""Scan orchestration.
+"""Scan orchestration — REAL data only.
 
-A scan: pull every concern from the best available provider, merge real over demo
-per subnet, compute scores, and persist snapshots + signals + whale events.
+A scan:
+  1. pull every subnet's on-chain state from the Subtensor chain (required),
+  2. pull real development activity from GitHub for on-chain repos (best-effort),
+  3. compute REAL 24h price/emission deltas from stored history,
+  4. score with the aGap engine (awareness pillar excluded unless a social source exists),
+  5. persist snapshots, history, and signals derived from real events.
+
+No synthetic data: if the chain is unreachable the scan raises and the previous
+snapshot is left untouched.
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlmodel import Session, delete
+from sqlmodel import Session, col, delete, select
 
 from ..ai import summarise_event
 from ..config import Settings, get_settings
 from ..db import engine
-from ..models import Signal, SubnetSnapshot, WhaleEvent
+from ..models import PriceHistory, Signal, SubnetSnapshot
 from ..providers import resolve_providers
-from ..providers.base import ChainData, DevData, SocialData, WhaleData
-from ..registry import SUBNET_REGISTRY, get_registry_entry
+from ..providers.base import ChainData, DevData
 from ..scoring import compute_scores
 
 log = logging.getLogger("alpha.scan")
 
 _LAST_SCAN: datetime | None = None
+_HISTORY_RETENTION_DAYS = 3
+_DELTA_WINDOW_HOURS = 24
 
 
 def last_scan_time() -> datetime | None:
     return _LAST_SCAN
 
 
-def _merge(real: dict, demo: dict) -> dict:
-    """Real data wins per-netuid; demo fills the gaps."""
-    merged = dict(demo)
-    merged.update(real)
-    return merged
+def _compute_deltas(
+    session: Session, netuids: list[int]
+) -> dict[int, tuple[float, float]]:
+    """Return netuid -> (price_change_pct, emission_change_pct) from stored history."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=_HISTORY_RETENTION_DAYS)
+    rows = session.exec(
+        select(PriceHistory).where(PriceHistory.ts >= cutoff).order_by(PriceHistory.ts)
+    ).all()
+    by_netuid: dict[int, list[PriceHistory]] = {}
+    for r in rows:
+        by_netuid.setdefault(r.netuid, []).append(r)
 
-
-def _safe(provider, method: str, netuids: list[int]) -> dict:
-    if provider is None:
-        return {}
-    try:
-        return getattr(provider, method)(netuids) or {}
-    except Exception as exc:  # noqa: BLE001
-        log.warning("provider %s.%s failed: %s", getattr(provider, "name", "?"), method, exc)
-        return {}
+    target = datetime.now(timezone.utc) - timedelta(hours=_DELTA_WINDOW_HOURS)
+    out: dict[int, tuple[float, float]] = {}
+    for n in netuids:
+        hist = by_netuid.get(n)
+        if not hist:
+            out[n] = (0.0, 0.0)
+            continue
+        # closest row at or before the 24h mark; else the oldest we have
+        ref = None
+        for r in hist:
+            if r.ts <= target:
+                ref = r
+        ref = ref or hist[0]
+        price_chg = (
+            ((hist[-1].price_tao - ref.price_tao) / ref.price_tao * 100.0)
+            if ref.price_tao else 0.0
+        )
+        emis_chg = (
+            ((hist[-1].emission_share - ref.emission_share) / ref.emission_share * 100.0)
+            if ref.emission_share else 0.0
+        )
+        out[n] = (round(price_chg, 2), round(emis_chg, 2))
+    return out
 
 
 def run_scan(settings: Settings | None = None, max_signals_with_ai: int = 12) -> int:
-    """Execute one full scan. Returns the number of subnets written."""
     global _LAST_SCAN
     settings = settings or get_settings()
-    netuids = list(SUBNET_REGISTRY.keys())[: settings.subnet_count]
     providers = resolve_providers(settings)
 
-    chain: dict[int, ChainData] = _merge(
-        _safe(providers.chain, "chain_data", netuids), providers.demo.chain_data(netuids))
-    dev: dict[int, DevData] = _merge(
-        _safe(providers.dev, "dev_data", netuids), providers.demo.dev_data(netuids))
-    social: dict[int, SocialData] = _merge(
-        _safe(providers.social, "social_data", netuids), providers.demo.social_data(netuids))
-    whale: dict[int, WhaleData] = _merge(
-        _safe(providers.whale, "whale_data", netuids), providers.demo.whale_data(netuids))
+    # 1. On-chain truth (required).
+    netuid_range = list(range(1, settings.subnet_count + 1))
+    chain: dict[int, ChainData] = providers.chain.chain_data(netuid_range)
+    chain = {n: c for n, c in chain.items() if n >= 1}
+    netuids = sorted(chain.keys())
 
-    snapshots: list[SubnetSnapshot] = []
-    candidate_signals: list[tuple[int, str, object]] = []  # (strength, kind, event-ish)
-    whale_rows: list[WhaleEvent] = []
+    # 2. Real development activity for on-chain GitHub repos.
+    dev: dict[int, DevData] = {}
+    if providers.dev is not None:
+        repos = {n: c.github for n, c in chain.items() if c.github}
+        try:
+            dev = providers.dev.dev_data_for_repos(repos)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("github dev scan failed: %s", exc)
 
-    for n in netuids:
-        meta = get_registry_entry(n)
-        c, d, s, w = chain[n], dev[n], social[n], whale[n]
-        scores = compute_scores(c, d, s, w)
-        snapshots.append(SubnetSnapshot(
-            netuid=n, name=meta.name, symbol=meta.symbol,
-            price_tao=c.price_tao, price_change_24h=c.price_change_24h,
-            market_cap_tao=c.market_cap_tao, liquidity_tao=c.liquidity_tao,
-            emission_share=c.emission_share, emission_change=c.emission_change,
-            volume_24h_tao=c.volume_24h_tao, validators=c.validators, miners=c.miners,
-            nakamoto_coefficient=c.nakamoto_coefficient,
-            commits_7d=d.commits_7d, contributors_7d=d.contributors_7d,
-            releases_30d=d.releases_30d, last_commit_at=d.last_commit_at,
-            mentions_24h=s.mentions_24h, social_engagement=s.engagement,
-            heat_score=s.heat_score, buy_sell_ratio=w.buy_sell_ratio,
-            smart_money_flow=w.smart_money_flow, is_whale_accumulating=w.is_accumulating,
-            agap_score=scores.agap, score_development=scores.development,
-            score_market_gap=scores.market_gap, score_awareness=scores.awareness,
-            score_smart_money=scores.smart_money,
-        ))
+    social = {}  # awareness pillar: only when a social provider is configured
 
-        # Dev events -> candidate development signals.
-        for ev in d.events:
-            strength = int(min(100, scores.development * 0.6 + 30))
-            candidate_signals.append((strength, "development", (n, meta.name, ev)))
+    with Session(engine) as session:
+        deltas = _compute_deltas(session, netuids)
 
-        # Emission spike signal.
-        if c.emission_change >= 18:
-            candidate_signals.append((
-                int(min(100, 50 + c.emission_change)), "emission", (n, meta.name, c)))
+        snapshots: list[SubnetSnapshot] = []
+        history_rows: list[PriceHistory] = []
+        candidate_signals: list[tuple[int, str, object]] = []
 
-        # Going viral / social signal.
-        if s.going_viral:
-            candidate_signals.append((int(min(100, s.heat_score)), "social", (n, meta.name, s)))
+        for n in netuids:
+            c = chain[n]
+            price_chg, emis_chg = deltas.get(n, (0.0, 0.0))
+            c.price_change_24h = price_chg
+            c.emission_change = emis_chg
+            d = dev.get(n)
+            sc = compute_scores(c, d, social.get(n))
 
-        # Whale events.
-        if w.is_accumulating:
-            candidate_signals.append((
-                int(min(100, 50 + w.buy_sell_ratio * 12)), "whale", (n, meta.name, w)))
-            for we in w.events:
-                whale_rows.append(WhaleEvent(
-                    netuid=n, subnet_name=meta.name, wallet=we.wallet,
-                    wallet_label=we.wallet_label, direction=we.direction,
-                    amount_tao=we.amount_tao, buy_sell_ratio=w.buy_sell_ratio,
-                ))
+            is_inflow = c.net_tao_flow > 0 and sc.smart_money >= 60
 
-    candidate_signals.sort(key=lambda t: t[0], reverse=True)
+            snapshots.append(SubnetSnapshot(
+                netuid=n, name=c.name or f"Subnet {n}", symbol=c.symbol or "α",
+                price_tao=c.price_tao, price_change_24h=price_chg,
+                market_cap_tao=c.market_cap_tao, liquidity_tao=c.liquidity_tao,
+                emission_share=c.emission_share, emission_change=emis_chg,
+                volume_24h_tao=c.volume_24h_tao, net_tao_flow=c.net_tao_flow,
+                github=c.github, url=c.url, owner=c.owner, description=c.description,
+                validators=c.validators, miners=c.miners,
+                nakamoto_coefficient=c.nakamoto_coefficient,
+                commits_7d=(d.commits_7d if d else 0),
+                contributors_7d=(d.contributors_7d if d else 0),
+                releases_30d=(d.releases_30d if d else 0),
+                last_commit_at=(d.last_commit_at if d else None),
+                mentions_24h=0, social_engagement=0, heat_score=0.0,
+                buy_sell_ratio=0.0, smart_money_flow=c.net_tao_flow,
+                is_whale_accumulating=is_inflow,
+                agap_score=sc.agap, score_development=sc.development,
+                score_market_gap=sc.market_gap,
+                score_awareness=(sc.awareness or 0.0),
+                score_smart_money=sc.smart_money,
+                awareness_available=sc.available["awareness"],
+            ))
+            history_rows.append(PriceHistory(
+                netuid=n, price_tao=c.price_tao, emission_share=c.emission_share,
+            ))
 
+            if d:
+                for ev in d.events:
+                    strength = int(min(100, sc.development * 0.6 + 30))
+                    candidate_signals.append((strength, "development", (n, c.name or f"SN{n}", ev)))
+            if emis_chg >= 10:
+                candidate_signals.append((int(min(100, 50 + emis_chg)), "emission", (n, c.name or f"SN{n}", c)))
+            if is_inflow and c.net_tao_flow > 0:
+                strength = int(min(100, 50 + sc.smart_money * 0.4))
+                candidate_signals.append((strength, "flow", (n, c.name or f"SN{n}", c)))
+
+        candidate_signals.sort(key=lambda t: t[0], reverse=True)
+        signals = _build_signals(settings, candidate_signals, max_signals_with_ai)
+
+        # Persist (replace current snapshot + signals; APPEND history).
+        session.exec(delete(SubnetSnapshot))
+        session.exec(delete(Signal))
+        session.add_all(snapshots)
+        session.add_all(signals)
+        session.add_all(history_rows)
+        # prune old history
+        cutoff = datetime.now(timezone.utc) - timedelta(days=_HISTORY_RETENTION_DAYS)
+        session.exec(delete(PriceHistory).where(col(PriceHistory.ts) < cutoff))
+        session.commit()
+
+    _LAST_SCAN = datetime.now(timezone.utc)
+    log.info("scan complete: %d subnets, %d dev repos, %d signals",
+             len(snapshots), len(dev), len(signals))
+    return len(snapshots)
+
+
+def _build_signals(settings, candidates, ai_budget: int) -> list[Signal]:
     signals: list[Signal] = []
-    ai_budget = max_signals_with_ai
-    for strength, kind, payload in candidate_signals[:60]:
+    for strength, kind, payload in candidates[:60]:
         n, name, obj = payload
         if kind == "development":
             ev = obj
@@ -125,7 +180,7 @@ def run_scan(settings: Settings | None = None, max_signals_with_ai: int = 12) ->
             else:
                 breakdown = {
                     "what_built": ev.title, "why_matters": ev.detail,
-                    "simple_terms": f"The {name} team shipped something new.",
+                    "simple_terms": f"The {name} team pushed new code.",
                     "alpha_take": "Dev activity often precedes a re-rating.",
                 }
             signals.append(Signal(
@@ -137,43 +192,21 @@ def run_scan(settings: Settings | None = None, max_signals_with_ai: int = 12) ->
             c = obj
             signals.append(Signal(
                 netuid=n, subnet_name=name, kind=kind,
-                title=f"Emission share up {c.emission_change:.0f}%",
-                summary="Network weight rotating in.", signal_strength=strength,
-                why_matters="Validators rotating emission toward a subnet is a leading fundamental signal.",
-                simple_terms="The network is paying this subnet more — insiders may be confident.",
-                alpha_take="Emission shifts lead price; watch for accumulation.",
+                title=f"Emission weight up {c.emission_change:.0f}%",
+                summary="Network value rotating in.", signal_strength=strength,
+                why_matters="A rising emission/price weight means the network is allocating more value to this subnet.",
+                simple_terms="The network is paying this subnet more than before.",
+                alpha_take="Emission shifts lead price; watch for follow-through.",
             ))
-        elif kind == "social":
-            s = obj
+        elif kind == "flow":
+            c = obj
             signals.append(Signal(
-                netuid=n, subnet_name=name, kind=kind,
-                title=f"Going viral · heat {s.heat_score:.0f}",
-                summary=f"{s.mentions_24h} mentions in 24h.", signal_strength=strength,
-                why_matters="Rapid social acceleration can front-run a price move.",
-                simple_terms="People are suddenly talking about this subnet a lot.",
-                alpha_take="If dev backs the hype it can run; if not, fade it.",
+                netuid=n, subnet_name=name, kind="whale",
+                title=f"Net capital inflow · {c.net_tao_flow:+.2f} τ",
+                summary="Positive net TAO flow into the subnet pool.",
+                signal_strength=strength,
+                why_matters="Net capital flowing into the pool is real, on-chain accumulation.",
+                simple_terms="More TAO is flowing into this subnet than out.",
+                alpha_take="Follow the flow — capital often moves before narrative.",
             ))
-        elif kind == "whale":
-            w = obj
-            signals.append(Signal(
-                netuid=n, subnet_name=name, kind=kind,
-                title=f"Whale accumulation · {w.buy_sell_ratio:.1f}x",
-                summary="Large wallets buying.", signal_strength=strength,
-                why_matters="Smart money accumulating before retail is a classic edge.",
-                simple_terms="Big wallets are quietly buying this subnet.",
-                alpha_take="Follow the smart money — but size for volatility.",
-            ))
-
-    with Session(engine) as session:
-        session.exec(delete(SubnetSnapshot))
-        session.exec(delete(Signal))
-        session.exec(delete(WhaleEvent))
-        session.add_all(snapshots)
-        session.add_all(signals)
-        session.add_all(whale_rows)
-        session.commit()
-
-    _LAST_SCAN = datetime.now(timezone.utc)
-    log.info("scan complete: %d subnets, %d signals, %d whale events",
-             len(snapshots), len(signals), len(whale_rows))
-    return len(snapshots)
+    return signals
